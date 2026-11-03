@@ -10,6 +10,9 @@ A procedural ASCII art animation of a blooming lily bouquet under a starry sky, 
 - A vector-to-ASCII pipeline: shapes are painted onto a low-res offscreen canvas, each pixel's brightness picks a character from ` .:-=+*cxoaX#%&@`, and the glyphs are colored over a soft glow
 - A pastel palette: baby blue and baby pink petals with blushing tips and dark centers
 
+- A crescent moon in the corner, reflected in the water
+- Generated music (no audio files): a soft chord pad and a wandering music-box melody, with a chime as each lily opens
+
 ## Run it
 
-Open `index.html` in a web browser. Click, or press any key, to replant the bouquet.
+Open `index.html` in a web browser. Click, or press any key, to replant the bouquet. The first click also starts the music. Press **M** to toggle sound.

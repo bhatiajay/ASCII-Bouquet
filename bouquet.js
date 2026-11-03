@@ -672,7 +672,14 @@
     }
     for (const st of stems) drawStem(octx, st, base, t);
     drawRibbon(octx, base);
-    for (const q of flowerQueue) q.open = drawFlower(octx, q.c, q.st, t);
+    for (const q of flowerQueue) {
+      q.open = drawFlower(octx, q.c, q.st, t);
+      const f = q.st.flower;
+      if (!f.chimed && q.open > 0.3) { // chime once as each lily opens
+        f.chimed = true;
+        window.BouquetAudio?.bloom(COLORS.flowers.indexOf(f.pal));
+      }
+    }
     drawWater(octx, clock);
   }
 
@@ -742,10 +749,20 @@
   }
 
   window.addEventListener('resize', () => { resize(); bouquet = buildBouquet(seed); });
-  window.addEventListener('pointerdown', restart);
+  // Browsers only allow sound after a click or key press, so the first one starts the music.
+  window.addEventListener('pointerdown', () => {
+    window.BouquetAudio?.start();
+    restart();
+  });
   window.addEventListener('keydown', e => {
     if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
     e.preventDefault();
+    const audio = window.BouquetAudio;
+    if (e.key === 'm' || e.key === 'M') { // M toggles sound without replanting
+      if (audio) audio.isStarted() ? audio.toggleMute() : audio.start();
+      return;
+    }
+    audio?.start();
     restart();
   });
 
