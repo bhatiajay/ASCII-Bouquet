@@ -11,7 +11,7 @@
   // ---------- Settings ----------
   const RAMP = ' .:-=+*cxoaX#%&@'; // dark -> bright character density ramp
   const WATER_RAMP = ' .,-~~≈';     // a softer, wavier ramp used below the waterline
-  const FONT_SIZE = 13;              // px size of each glyph
+  const FONT_SIZE = 10;              // px size of each glyph
   const SUPERSAMPLE = 2;             // offscreen pixels per cell, per axis (smoother edges)
   const LOOP_SECONDS = 30;           // auto-replant after this many seconds
   const FADE_SECONDS = 1.5;          // fade-out before an automatic replant
@@ -45,9 +45,9 @@
     ripple: [150, 200, 235],
     flowers: [
       // baby blue lilies with a pink blush at the tips
-      { base: '#7fbfe6', mid: '#a7d8f0', tip: '#e3f3fc', blush: '#f7c6d9', edge: '#6aa9d4', vein: '#4a86bf', spot: '#3d5f8f' },
+      { base: '#7fbfe6', mid: '#a7d8f0', tip: '#e3f3fc', blush: '#f7c6d9', edge: '#6aa9d4', vein: '#5a92c8', spot: '#3d5f8f' },
       // baby pink lilies with a soft peach blush
-      { base: '#ee9dbd', mid: '#f8bbd0', tip: '#fff0f5', blush: '#ffe0d2', edge: '#e48bb0', vein: '#d0628f', spot: '#8f3a5e' },
+      { base: '#ee9dbd', mid: '#f8bbd0', tip: '#fff0f5', blush: '#ffe0d2', edge: '#e48bb0', vein: '#d86e98', spot: '#8f3a5e' },
     ],
   };
 
@@ -212,13 +212,12 @@
       ctx.beginPath(); ctx.arc(m.x + c.x * m.r, m.y + c.y * m.r, c.r * m.r, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Erase an offset circle to leave a crescent. 'destination-out' cuts a hole
-    // in what's already drawn, so the dark sky shows through.
-    ctx.globalCompositeOperation = 'destination-out';
+    // Cover an offset circle in the night-sky colour to leave a crescent. It hides
+    // the disc and the halo behind it, so the dark side blends into the sky.
+    ctx.fillStyle = COLORS.bg;
     ctx.beginPath();
     ctx.arc(m.x + MOON_SHADOW.x * m.r, m.y + MOON_SHADOW.y * m.r, MOON_SHADOW.r * m.r, 0, Math.PI * 2);
     ctx.fill();
-    ctx.globalCompositeOperation = 'source-over';
   }
 
   // ---------- Breeze ----------
@@ -301,7 +300,7 @@
           color: pick(COLORS.leaves),
         });
       }
-      st.flower = makeFlower(opts.main ? U * rr(13, 16) : U * rr(8, 10));
+      st.flower = makeFlower(opts.main ? U * rr(11, 13) : U * rr(6.5, 8));
       // Sometimes branch off a smaller side stem with its own flower.
       if (opts.main && rand() < 0.65) {
         const s = rr(0.45, 0.65);
@@ -460,20 +459,23 @@
     ctx.bezierCurveTo(L * 0.75, w * 0.7, L * 0.3, w, 0, 0);
     ctx.fillStyle = g;
     ctx.fill();
+    // Outline the bud's seams; fade the outline as the petals separate.
+    ctx.globalAlpha = 1 - 0.7 * open;
     ctx.strokeStyle = pal.edge;
     ctx.lineWidth = U * 0.3;
     ctx.stroke();
+    ctx.globalAlpha = 1;
 
     // Lily markings fade in as it opens: a midrib, two side veins, freckles near the throat.
     if (open <= 0.05) return;
     ctx.globalAlpha = open;
     ctx.strokeStyle = pal.vein;
-    ctx.lineWidth = U * 0.6;
+    ctx.lineWidth = U * 0.45;
     ctx.beginPath();
     ctx.moveTo(L * 0.06, 0);
     ctx.quadraticCurveTo(L * 0.5, curl * 0.3, L * 0.9, curl * 0.85);
     ctx.stroke();
-    ctx.lineWidth = U * 0.4;
+    ctx.lineWidth = U * 0.25;
     for (const s of [-1, 1]) {
       ctx.beginPath();
       ctx.moveTo(L * 0.1, s * w * 0.12);
@@ -514,7 +516,7 @@
         const closedA = heading + frac * 0.35;
         const openA = heading + f.rot + frac * Math.PI * 2;
         const a = lerp(closedA, openA, open);
-        const w = R * lerp(0.09, inner ? 0.26 : 0.22, open) * (0.6 + 0.4 * bud);
+        const w = R * lerp(0.08, inner ? 0.19 : 0.17, open) * (0.6 + 0.4 * bud);
         const curl = (k % 2 ? 1 : -1) * R * 0.08 * open; // tips flick sideways as they recurve
         ctx.save();
         ctx.translate(C.x, C.y);
