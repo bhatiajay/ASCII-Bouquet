@@ -10,6 +10,7 @@
 
   // ---------- Settings ----------
   const RAMP = ' .:-=+*cxoaX#%&@'; // dark -> bright character density ramp
+  const WATER_RAMP = ' .,-~~≈';     // a softer, wavier ramp used below the waterline
   const FONT_SIZE = 13;              // px size of each glyph
   const SUPERSAMPLE = 2;             // offscreen pixels per cell, per axis (smoother edges)
   const LOOP_SECONDS = 30;           // auto-replant after this many seconds
@@ -32,11 +33,17 @@
     eucStem: '#6f9a7a',
     ribbon: '#f3b3c9',
     ribbonKnot: '#f9d3df',
+    anther: '#c8743c',
+    pistil: '#cfe3a6',
+    stars: ['#ffffff', '#dfe9ff', '#ffe3ee', '#fff4d6'],
+    waterTop: 'rgba(58, 96, 140, 0.7)',
+    waterDeep: 'rgba(20, 36, 62, 0.9)',
+    ripple: [150, 200, 235],
     flowers: [
-      // baby blue petals with a pink blush at the tips
-      { base: '#7fbfe6', mid: '#a7d8f0', tip: '#e3f3fc', blush: '#f7c6d9', edge: '#6aa9d4' },
-      // baby pink petals with a soft peach blush
-      { base: '#ee9dbd', mid: '#f8bbd0', tip: '#fff0f5', blush: '#ffe0d2', edge: '#e48bb0' },
+      // baby blue lilies with a pink blush at the tips
+      { base: '#7fbfe6', mid: '#a7d8f0', tip: '#e3f3fc', blush: '#f7c6d9', edge: '#6aa9d4', vein: '#4a86bf', spot: '#3d5f8f' },
+      // baby pink lilies with a soft peach blush
+      { base: '#ee9dbd', mid: '#f8bbd0', tip: '#fff0f5', blush: '#ffe0d2', edge: '#e48bb0', vein: '#d0628f', spot: '#8f3a5e' },
     ],
   };
 
@@ -59,6 +66,20 @@
   let rand = Math.random;
   const rr = (a, b) => a + (b - a) * rand();
   const pick = arr => arr[Math.floor(rand() * arr.length)];
+
+  // Blend two hex colours, e.g. to tint a closed bud green.
+  const rgbCache = {};
+  function hexToRgb(hex) {
+    if (!rgbCache[hex]) {
+      const n = parseInt(hex.slice(1), 16);
+      rgbCache[hex] = [n >> 16, (n >> 8) & 255, n & 255];
+    }
+    return rgbCache[hex];
+  }
+  function mixColor(hexA, hexB, t) {
+    const a = hexToRgb(hexA), b = hexToRgb(hexB);
+    return `rgb(${Math.round(lerp(a[0], b[0], t))},${Math.round(lerp(a[1], b[1], t))},${Math.round(lerp(a[2], b[2], t))})`;
+  }
 
   // Cubic Bézier helpers. A curve is an array of 4 points [p0, p1, p2, p3].
   function bezPoint(c, t) {
@@ -90,7 +111,8 @@
   const octx = off.getContext('2d', { willReadFrequently: true });
   const FONT = `${FONT_SIZE}px ui-monospace, Menlo, Consolas, monospace`;
 
-  let viewW, viewH, cols, rows, cellW, cellH, gridX, gridY, worldW, worldH, U;
+  let viewW, viewH, cols, rows, cellW, cellH, gridX, gridY, worldW, worldH, U, waterTop;
+  let stars = [];
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
@@ -112,6 +134,39 @@
     gridY = (viewH - worldH) / 2;
     off.width = cols * SUPERSAMPLE;
     off.height = rows * SUPERSAMPLE;
+    U = Math.min(worldH / 112, worldW / 125); // one "unit" scales the whole scene
+    waterTop = worldH - U * 10;
+    makeStars();
+  }
+
+  // ---------- Night sky ----------
+  // Stars use their own fixed seed, so the sky stays the same when you replant.
+  function makeStars() {
+    const r = mulberry32(20261102);
+    const skyRows = Math.max(1, Math.floor(waterTop / cellH) - 1);
+    const count = Math.floor(cols * skyRows * 0.012);
+    stars = [];
+    for (let i = 0; i < count; i++) {
+      const bright = r() < 0.1;
+      stars.push({
+        col: Math.floor(r() * cols),
+        row: Math.floor(r() * skyRows),
+        level: bright ? 0.4 + r() * 0.2 : 0.07 + r() * 0.2,
+        speed: 0.5 + r() * 1.5,
+        phase: r() * Math.PI * 2,
+        color: COLORS.stars[Math.floor(r() * COLORS.stars.length)],
+      });
+    }
+  }
+
+  // Each star fills exactly one character cell; its twinkle changes the glyph.
+  function drawStars(ctx, clock) {
+    for (const s of stars) {
+      ctx.globalAlpha = s.level * (0.55 + 0.45 * Math.sin(clock * s.speed + s.phase));
+      ctx.fillStyle = s.color;
+      ctx.fillRect(s.col * cellW, s.row * cellH, cellW, cellH);
+    }
+    ctx.globalAlpha = 1;
   }
 
   // ---------- Breeze ----------
@@ -139,18 +194,20 @@
   // ---------- Bouquet generation ----------
   let flowerCounter = 0;
 
+  // A lily: six tepals (3 outer + 3 inner), six stamens and a central pistil.
   function makeFlower(R) {
-    const n = 5 + Math.floor(rand() * 3);
-    const stamens = [];
-    const m = 10 + Math.floor(rand() * 5);
-    for (let i = 0; i < m; i++) stamens.push({ a: (i / m) * Math.PI * 2 + rr(-0.15, 0.15), l: rr(0.6, 1) });
+    const spots = []; // freckles near the throat of each petal
+    for (let i = 0; i < 4; i++) spots.push({ s: rr(0.15, 0.4), o: rr(-0.35, 0.35) });
+    const stamens = []; // one between each pair of petals
+    for (let i = 0; i < 6; i++) stamens.push({ a: (i / 6) * Math.PI * 2 - Math.PI + rr(-0.12, 0.12), l: rr(0.5, 0.62) });
     return {
       radius: R,
       pal: COLORS.flowers[flowerCounter++ % COLORS.flowers.length],
-      outer: n, inner: n,
-      rot: rr(-0.4, 0.4),
-      budDur: rr(1.2, 2.0),
-      openDur: rr(2.5, 3.5),
+      rot: rr(-0.3, 0.3),
+      budDur: rr(1.5, 2.2),  // the bud grows and swells
+      holdDur: rr(0.6, 1.2), // ...stays closed for a moment...
+      openDur: rr(3.5, 4.5), // ...then the petals unfurl
+      spots,
       stamens,
     };
   }
@@ -192,7 +249,7 @@
           color: pick(COLORS.leaves),
         });
       }
-      st.flower = makeFlower(opts.main ? U * rr(8, 10.5) : U * rr(4.5, 6));
+      st.flower = makeFlower(opts.main ? U * rr(13, 16) : U * rr(8, 10));
       // Sometimes branch off a smaller side stem with its own flower.
       if (opts.main && rand() < 0.65) {
         const s = rr(0.45, 0.65);
@@ -223,15 +280,15 @@
   function buildBouquet(seed) {
     rand = mulberry32(seed);
     flowerCounter = Math.floor(rand() * 2);
-    U = Math.min(worldH / 110, worldW / 100); // one "unit" scales the whole bouquet
-    const base = { x: worldW / 2, y: worldH - U * 13 };
+    const base = { x: worldW / 2, y: waterTop - U * 3 }; // the tie sits just above the water
     const stems = [], fillers = [], cuts = [];
 
-    const N = 7;
+    // Fewer, wider-spread stems so the big lilies have room.
+    const N = 5;
     for (let i = 0; i < N; i++) {
       const k = i / (N - 1) - 0.5;
-      const a = k * 1.2 + rr(-0.07, 0.07);
-      const h = U * (74 - Math.abs(k) * 28 + rr(-5, 5));
+      const a = k * 1.5 + rr(-0.06, 0.06);
+      const h = U * (76 - Math.abs(k) * 48 + rr(-4, 4));
       const st = makeStem(a, h, rr(0.2, 2.2), { kind: 'flower', main: true });
       stems.push(st);
       // The stems cross at the tie, so their cut ends poke out the other side.
@@ -335,42 +392,54 @@
     if (st.flower && g >= 1) flowerQueue.push({ c, st });
   }
 
-  function drawPetalLayer(ctx, C, heading, n, open, bud, R, pal, rot, inner) {
-    const L = R * (0.38 + 0.62 * open) * (0.3 + 0.7 * bud);
-    const w = R * (0.13 + 0.25 * open) * (0.6 + 0.4 * bud);
-    if (L < 0.1) return;
-    const g = ctx.createRadialGradient(C.x, C.y, 0, C.x, C.y, L);
-    if (inner) {
-      g.addColorStop(0, pal.base); g.addColorStop(0.5, pal.mid); g.addColorStop(1, pal.blush);
-    } else {
-      g.addColorStop(0, pal.base); g.addColorStop(0.45, pal.mid); g.addColorStop(0.85, pal.tip); g.addColorStop(1, pal.blush);
-    }
+  // One lily tepal (petal), drawn pointing along +x from the flower's centre.
+  function drawTepal(ctx, f, L, w, curl, open, inner) {
+    const pal = f.pal;
+    const g = ctx.createLinearGradient(0, 0, L, 0);
+    g.addColorStop(0, mixColor(COLORS.sepal, pal.base, 0.35 + 0.65 * open)); // buds are green at the base
+    g.addColorStop(0.4, pal.mid);
+    g.addColorStop(0.8, inner ? pal.blush : pal.tip);
+    g.addColorStop(1, pal.blush);
+
+    // Long lance shape: narrow base, widest near 40%, sharp pointed tip.
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(L * 0.3, -w, L * 0.75, -w * 0.7, L, curl);
+    ctx.bezierCurveTo(L * 0.75, w * 0.7, L * 0.3, w, 0, 0);
     ctx.fillStyle = g;
+    ctx.fill();
     ctx.strokeStyle = pal.edge;
-    ctx.lineWidth = U * 0.25;
-    for (let k = 0; k < n; k++) {
-      // Petals start bunched together (a closed bud) and fan out to a full circle.
-      const frac = (k + 0.5) / n;
-      const closedA = heading + (frac - 0.5) * 0.55;
-      const openA = heading + rot + (frac - 0.5) * Math.PI * 2;
-      const a = lerp(closedA, openA, open);
-      const dx = Math.cos(a), dy = Math.sin(a), px = -dy, py = dx;
+    ctx.lineWidth = U * 0.3;
+    ctx.stroke();
+
+    // Lily markings fade in as it opens: a midrib, two side veins, freckles near the throat.
+    if (open <= 0.05) return;
+    ctx.globalAlpha = open;
+    ctx.strokeStyle = pal.vein;
+    ctx.lineWidth = U * 0.6;
+    ctx.beginPath();
+    ctx.moveTo(L * 0.06, 0);
+    ctx.quadraticCurveTo(L * 0.5, curl * 0.3, L * 0.9, curl * 0.85);
+    ctx.stroke();
+    ctx.lineWidth = U * 0.4;
+    for (const s of [-1, 1]) {
       ctx.beginPath();
-      ctx.moveTo(C.x, C.y);
-      ctx.bezierCurveTo(
-        C.x + dx * L * 0.3 + px * w,         C.y + dy * L * 0.3 + py * w,
-        C.x + dx * L * 0.95 + px * w * 0.85, C.y + dy * L * 0.95 + py * w * 0.85,
-        C.x + dx * L,                        C.y + dy * L);
-      ctx.bezierCurveTo(
-        C.x + dx * L * 0.95 - px * w * 0.85, C.y + dy * L * 0.95 - py * w * 0.85,
-        C.x + dx * L * 0.3 - px * w,         C.y + dy * L * 0.3 - py * w,
-        C.x, C.y);
-      ctx.fill();
+      ctx.moveTo(L * 0.1, s * w * 0.12);
+      ctx.quadraticCurveTo(L * 0.4, s * w * 0.6, L * 0.75, s * w * 0.25 + curl * 0.6);
       ctx.stroke();
     }
+    ctx.fillStyle = pal.spot;
+    for (const sp of f.spots) {
+      ctx.beginPath();
+      ctx.arc(L * sp.s, w * sp.o, U * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
-  // Growth timeline at the stem tip: swelling bud -> unfolding petals -> stamens.
+  // Lily timeline at the stem tip:
+  //   slender closed bud grows -> holds closed -> six tepals unfurl into a star -> stamens appear.
+  // Returns how open the flower is (0..1), used for its reflection in the water.
   function drawFlower(ctx, c, st, t) {
     const f = st.flower;
     const C = c[3];
@@ -378,48 +447,125 @@
     const heading = Math.atan2(tan.y, tan.x);
     const tb = t - (st.delay + st.grow);
     const bud = easeOut(clamp01(tb / f.budDur));
-    if (bud <= 0) return;
-    const open = easeInOut(clamp01((tb - f.budDur * 0.7) / f.openDur));
+    if (bud <= 0) return 0;
+    const open = easeInOut(clamp01((tb - f.budDur - f.holdDur) / f.openDur));
     const R = f.radius;
+    const L = R * lerp(0.75, 1, open) * (0.35 + 0.65 * bud);
 
-    // Green sepals cup the bud, then spread back as it opens.
-    ctx.fillStyle = COLORS.sepal;
-    for (let k = -1; k <= 1; k++) {
-      ctx.save();
-      ctx.translate(C.x, C.y);
-      ctx.rotate(heading + k * lerp(0.35, 1.3, open));
-      leafPath(ctx, R * (0.3 + 0.2 * bud), R * 0.1 * (0.6 + 0.4 * bud));
-      ctx.fill();
-      ctx.restore();
+    // Outer three tepals first, then the inner three on top of them.
+    for (const inner of [false, true]) {
+      for (let k = 0; k < 3; k++) {
+        const idx = inner ? k * 2 + 1 : k * 2; // position 0..5 around the flower
+        const frac = (idx + 0.5) / 6 - 0.5;
+        // Closed: all tepals bunched along the stem direction (a long bud).
+        // Open: spread evenly into a six-pointed star.
+        const closedA = heading + frac * 0.35;
+        const openA = heading + f.rot + frac * Math.PI * 2;
+        const a = lerp(closedA, openA, open);
+        const w = R * lerp(0.09, inner ? 0.26 : 0.22, open) * (0.6 + 0.4 * bud);
+        const curl = (k % 2 ? 1 : -1) * R * 0.08 * open; // tips flick sideways as they recurve
+        ctx.save();
+        ctx.translate(C.x, C.y);
+        ctx.rotate(a);
+        drawTepal(ctx, f, L * (inner ? 0.94 : 1), w, curl, open, inner);
+        ctx.restore();
+      }
     }
 
-    drawPetalLayer(ctx, C, heading, f.outer, open, bud, R, f.pal, f.rot, false);
-    const open2 = clamp01((open - 0.15) / 0.85);
-    drawPetalLayer(ctx, C, heading, f.inner, open2, bud, R * 0.62, f.pal, f.rot + Math.PI / f.inner, true);
-
-    // Dark centre with stamens once the flower is mostly open.
-    const cOpen = clamp01((open - 0.35) / 0.65);
-    if (cOpen > 0) {
-      const sr = R * 0.36 * cOpen;
-      const tips = f.stamens.map(s => ({
-        x: C.x + Math.cos(s.a + f.rot) * sr * s.l,
-        y: C.y + Math.sin(s.a + f.rot) * sr * s.l,
-      }));
-      ctx.strokeStyle = COLORS.stamen;
-      ctx.lineWidth = U * 0.22;
-      for (const p of tips) {
-        ctx.beginPath(); ctx.moveTo(C.x, C.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-      }
-      const dr = R * 0.16 * (0.5 + 0.5 * cOpen);
+    // Dark throat once the petals part.
+    if (open > 0.2) {
+      const dr = R * 0.14 * clamp01((open - 0.2) / 0.5);
       const g = ctx.createRadialGradient(C.x, C.y, 0, C.x, C.y, dr);
       g.addColorStop(0, COLORS.center);
       g.addColorStop(1, COLORS.centerRing);
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(C.x, C.y, dr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = COLORS.stamen;
-      for (const p of tips) {
-        ctx.beginPath(); ctx.arc(p.x, p.y, U * 0.55 * cOpen, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Long stamens with rust-coloured anthers, and a pistil, once it's mostly open.
+    const sOpen = clamp01((open - 0.45) / 0.55);
+    if (sOpen > 0) {
+      ctx.lineCap = 'round';
+      for (const s of f.stamens) {
+        const a = heading + f.rot + s.a;
+        const len = R * s.l * sOpen;
+        const ex = C.x + Math.cos(a) * len, ey = C.y + Math.sin(a) * len;
+        ctx.strokeStyle = COLORS.stamen;
+        ctx.lineWidth = U * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(C.x, C.y);
+        ctx.quadraticCurveTo(C.x + Math.cos(a + 0.25) * len * 0.5, C.y + Math.sin(a + 0.25) * len * 0.5, ex, ey);
+        ctx.stroke();
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.rotate(a + Math.PI / 2);
+        ctx.fillStyle = COLORS.anther;
+        ctx.beginPath(); ctx.ellipse(0, 0, U * 1.3 * sOpen, U * 0.55 * sOpen, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
       }
+      const pa = heading + f.rot + 0.2;
+      const px = C.x + Math.cos(pa) * R * 0.62 * sOpen, py = C.y + Math.sin(pa) * R * 0.62 * sOpen;
+      ctx.strokeStyle = COLORS.pistil;
+      ctx.lineWidth = U * 0.4;
+      ctx.beginPath(); ctx.moveTo(C.x, C.y); ctx.lineTo(px, py); ctx.stroke();
+      ctx.fillStyle = COLORS.pistil;
+      ctx.beginPath(); ctx.arc(px, py, U * 0.8 * sOpen, 0, Math.PI * 2); ctx.fill();
+    }
+    return open;
+  }
+
+  // ---------- Water ----------
+  function waveY(x, clock) {
+    return Math.sin(x * 0.02 + clock * 1.2) * U * 0.5 + Math.sin(x * 0.051 - clock * 0.8) * U * 0.3;
+  }
+
+  // A translucent body of water (so the stem ends look submerged), soft pastel
+  // reflections of the open lilies, and ripple lines that drift and break apart.
+  function drawWater(ctx, clock) {
+    const depth = worldH - waterTop;
+    const body = ctx.createLinearGradient(0, waterTop, 0, worldH);
+    body.addColorStop(0, COLORS.waterTop);
+    body.addColorStop(1, COLORS.waterDeep);
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(0, worldH);
+    for (let x = 0; x <= worldW + cellW; x += cellW) ctx.lineTo(x, waterTop + waveY(x, clock));
+    ctx.lineTo(worldW, worldH);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.lineCap = 'round';
+    ctx.lineWidth = cellH * 0.45;
+    for (const q of flowerQueue) {
+      if (!(q.open > 0.1)) continue;
+      const f = q.st.flower, x0 = q.c[3].x;
+      ctx.strokeStyle = f.pal.mid;
+      for (let y = waterTop + cellH * 0.8; y < worldH; y += cellH) {
+        const d = (y - waterTop) / depth;
+        const half = f.radius * 0.6 * (1 - d * 0.6);
+        const wob = Math.sin(y * 0.3 + clock * 2 + x0) * U * 1.5;
+        ctx.globalAlpha = 0.35 * q.open * (1 - d * 0.7);
+        ctx.beginPath(); ctx.moveTo(x0 - half + wob, y); ctx.lineTo(x0 + half + wob, y); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    const [cr, cg, cb] = COLORS.ripple;
+    const lines = Math.max(2, Math.floor(depth / (cellH * 1.5)));
+    ctx.lineWidth = cellH * 0.35;
+    for (let i = 0; i < lines; i++) {
+      const y0 = waterTop + ((i + 0.4) * depth) / lines;
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${0.75 - (0.4 * i) / lines})`;
+      ctx.beginPath();
+      let pen = false;
+      for (let x = 0; x <= worldW; x += cellW) {
+        const on = Math.sin(x * 0.011 + i * 1.7 - clock * (0.5 + i * 0.2)) + Math.sin(x * 0.037 + i) * 0.5 > 0.35;
+        const y = y0 + waveY(x + i * 40, clock) * 0.5;
+        if (on && pen) ctx.lineTo(x, y);
+        else if (on) { ctx.moveTo(x, y); pen = true; }
+        else pen = false;
+      }
+      ctx.stroke();
     }
   }
 
@@ -441,7 +587,8 @@
     ctx.beginPath(); ctx.ellipse(b.x, b.y, U * 1.6, U * 1.3, 0, 0, Math.PI * 2); ctx.fill();
   }
 
-  function drawScene(t) {
+  // t = seconds since this bouquet was planted; clock = seconds since the page loaded.
+  function drawScene(t, clock) {
     octx.setTransform(1, 0, 0, 1, 0, 0);
     octx.clearRect(0, 0, off.width, off.height);
     // Map world (screen-pixel) coordinates onto the tiny offscreen canvas.
@@ -449,6 +596,7 @@
     flowerQueue.length = 0;
     const { base, stems, fillers, cuts } = bouquet;
 
+    drawStars(octx, clock);
     for (const f of fillers) drawStem(octx, f, base, t);
     if (t > 0.2) {
       for (const cut of cuts) {
@@ -458,7 +606,8 @@
     }
     for (const st of stems) drawStem(octx, st, base, t);
     drawRibbon(octx, base);
-    for (const q of flowerQueue) drawFlower(octx, q.c, q.st, t);
+    for (const q of flowerQueue) q.open = drawFlower(octx, q.c, q.st, t);
+    drawWater(octx, clock);
   }
 
   // ---------- Pixels -> ASCII ----------
@@ -479,9 +628,11 @@
     sctx.font = FONT;
     sctx.textBaseline = 'top';
     const data = octx.getImageData(0, 0, off.width, off.height).data;
-    const ow = off.width, samples = SUPERSAMPLE * SUPERSAMPLE, last = RAMP.length - 1;
+    const ow = off.width, samples = SUPERSAMPLE * SUPERSAMPLE;
 
     for (let y = 0; y < rows; y++) {
+      const ramp = (y + 0.5) * cellH >= waterTop ? WATER_RAMP : RAMP;
+      const last = ramp.length - 1;
       for (let x = 0; x < cols; x++) {
         // Average the supersampled pixels in this cell (colour weighted by alpha).
         let r = 0, g = 0, b = 0, a = 0;
@@ -500,7 +651,7 @@
         const idx = Math.min(last, Math.round(v * last));
         if (idx <= 0) continue;
         sctx.fillStyle = `rgb(${r | 0},${g | 0},${b | 0})`;
-        sctx.fillText(RAMP[idx], gridX + x * cellW, gridY + y * cellH);
+        sctx.fillText(ramp[idx], gridX + x * cellW, gridY + y * cellH);
       }
     }
     sctx.globalAlpha = 1;
@@ -519,7 +670,7 @@
     let t = (now - start) / 1000;
     if (t > LOOP_SECONDS) { restart(); t = 0; }
     const fade = clamp01((LOOP_SECONDS - t) / FADE_SECONDS);
-    drawScene(t);
+    drawScene(t, now / 1000);
     renderAscii(fade);
     requestAnimationFrame(frame);
   }
