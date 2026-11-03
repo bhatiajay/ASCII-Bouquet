@@ -11,7 +11,7 @@
   // ---------- Settings ----------
   const RAMP = ' .:-=+*cxoaX#%&@'; // dark -> bright character density ramp
   const WATER_RAMP = ' .,-~~≈';     // a softer, wavier ramp used below the waterline
-  const FONT_SIZE = 13;              // px size of each glyph
+  const FONT_SIZE = 10;              // px size of each glyph
   const SUPERSAMPLE = 2;             // offscreen pixels per cell, per axis (smoother edges)
   const LOOP_SECONDS = 30;           // auto-replant after this many seconds
   const FADE_SECONDS = 1.5;          // fade-out before an automatic replant
@@ -36,14 +36,18 @@
     anther: '#c8743c',
     pistil: '#cfe3a6',
     stars: ['#ffffff', '#dfe9ff', '#ffe3ee', '#fff4d6'],
+    moon: '#fbf6dc',
+    moonShade: '#e9e0b8',
+    moonCrater: '#d6cca2',
+    moonHalo: 'rgba(251, 246, 220, 0.2)',
     waterTop: 'rgba(58, 96, 140, 0.7)',
     waterDeep: 'rgba(20, 36, 62, 0.9)',
     ripple: [150, 200, 235],
     flowers: [
       // baby blue lilies with a pink blush at the tips
-      { base: '#7fbfe6', mid: '#a7d8f0', tip: '#e3f3fc', blush: '#f7c6d9', edge: '#6aa9d4', vein: '#4a86bf', spot: '#3d5f8f' },
+      { base: '#7fbfe6', mid: '#a7d8f0', tip: '#e3f3fc', blush: '#f7c6d9', edge: '#6aa9d4', vein: '#5a92c8', spot: '#3d5f8f' },
       // baby pink lilies with a soft peach blush
-      { base: '#ee9dbd', mid: '#f8bbd0', tip: '#fff0f5', blush: '#ffe0d2', edge: '#e48bb0', vein: '#d0628f', spot: '#8f3a5e' },
+      { base: '#ee9dbd', mid: '#f8bbd0', tip: '#fff0f5', blush: '#ffe0d2', edge: '#e48bb0', vein: '#d86e98', spot: '#8f3a5e' },
     ],
   };
 
@@ -145,12 +149,16 @@
     const r = mulberry32(20261102);
     const skyRows = Math.max(1, Math.floor(waterTop / cellH) - 1);
     const count = Math.floor(cols * skyRows * 0.012);
+    const moon = moonGeom();
     stars = [];
     for (let i = 0; i < count; i++) {
       const bright = r() < 0.1;
+      const col = Math.floor(r() * cols), row = Math.floor(r() * skyRows);
+      // No stars inside the moon or its halo.
+      if (Math.hypot((col + 0.5) * cellW - moon.x, (row + 0.5) * cellH - moon.y) < moon.r * 2.4) continue;
       stars.push({
-        col: Math.floor(r() * cols),
-        row: Math.floor(r() * skyRows),
+        col,
+        row,
         level: bright ? 0.4 + r() * 0.2 : 0.07 + r() * 0.2,
         speed: 0.5 + r() * 1.5,
         phase: r() * Math.PI * 2,
@@ -169,11 +177,59 @@
     ctx.globalAlpha = 1;
   }
 
+  // ---------- Moon ----------
+  function moonGeom() {
+    return { x: worldW - U * 14, y: U * 14, r: U * 6 };
+  }
+  // Craters sit on the lit (left) side of the crescent.
+  const MOON_CRATERS = [
+    { x: -0.6, y: -0.15, r: 0.14 },
+    { x: -0.45, y: 0.4, r: 0.12 },
+    { x: -0.2, y: 0.7, r: 0.08 },
+  ];
+  // The circle "bitten out" of the moon to make the crescent shape.
+  const MOON_SHADOW = { x: 0.45, y: -0.2, r: 0.9 };
+
+  // A crescent moon in the top-right corner, with craters and a softly pulsing halo.
+  function drawMoon(ctx, clock) {
+    const m = moonGeom();
+    const halo = ctx.createRadialGradient(m.x, m.y, m.r * 0.9, m.x, m.y, m.r * 2.2);
+    halo.addColorStop(0, COLORS.moonHalo);
+    halo.addColorStop(1, 'rgba(251, 246, 220, 0)');
+    ctx.globalAlpha = 0.85 + 0.15 * Math.sin(clock * 0.5);
+    ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    const disc = ctx.createRadialGradient(m.x - m.r * 0.6, m.y, 0, m.x, m.y, m.r);
+    disc.addColorStop(0, COLORS.moon);
+    disc.addColorStop(1, COLORS.moonShade);
+    ctx.fillStyle = disc;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = COLORS.moonCrater;
+    for (const c of MOON_CRATERS) {
+      ctx.beginPath(); ctx.arc(m.x + c.x * m.r, m.y + c.y * m.r, c.r * m.r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Cover an offset circle in the night-sky colour to leave a crescent. It hides
+    // the disc and the halo behind it, so the dark side blends into the sky.
+    ctx.fillStyle = COLORS.bg;
+    ctx.beginPath();
+    ctx.arc(m.x + MOON_SHADOW.x * m.r, m.y + MOON_SHADOW.y * m.r, MOON_SHADOW.r * m.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // ---------- Breeze ----------
+  // Overall wind strength (0.3..1), rising and falling over about 48 seconds.
+  // Shared by the swaying stems and the breeze sound, so what you hear matches what you see.
+  function gustAt(t) {
+    return 0.65 + 0.35 * Math.sin(t * 0.13 + 1.3);
+  }
+
   // A few layered sine waves plus a slow gust envelope feel organic.
   function breeze(t, phase) {
-    const gust = 0.65 + 0.35 * Math.sin(t * 0.13 + 1.3);
-    return gust * (Math.sin(t * 0.9 + phase) * 0.6 +
+    return gustAt(t) * (Math.sin(t * 0.9 + phase) * 0.6 +
                    Math.sin(t * 0.37 + phase * 1.7) * 0.3 +
                    Math.sin(t * 2.3 + phase * 0.6) * 0.1);
   }
@@ -249,7 +305,7 @@
           color: pick(COLORS.leaves),
         });
       }
-      st.flower = makeFlower(opts.main ? U * rr(13, 16) : U * rr(8, 10));
+      st.flower = makeFlower(opts.main ? U * rr(11, 13) : U * rr(6.5, 8));
       // Sometimes branch off a smaller side stem with its own flower.
       if (opts.main && rand() < 0.65) {
         const s = rr(0.45, 0.65);
@@ -408,20 +464,23 @@
     ctx.bezierCurveTo(L * 0.75, w * 0.7, L * 0.3, w, 0, 0);
     ctx.fillStyle = g;
     ctx.fill();
+    // Outline the bud's seams; fade the outline as the petals separate.
+    ctx.globalAlpha = 1 - 0.7 * open;
     ctx.strokeStyle = pal.edge;
     ctx.lineWidth = U * 0.3;
     ctx.stroke();
+    ctx.globalAlpha = 1;
 
     // Lily markings fade in as it opens: a midrib, two side veins, freckles near the throat.
     if (open <= 0.05) return;
     ctx.globalAlpha = open;
     ctx.strokeStyle = pal.vein;
-    ctx.lineWidth = U * 0.6;
+    ctx.lineWidth = U * 0.45;
     ctx.beginPath();
     ctx.moveTo(L * 0.06, 0);
     ctx.quadraticCurveTo(L * 0.5, curl * 0.3, L * 0.9, curl * 0.85);
     ctx.stroke();
-    ctx.lineWidth = U * 0.4;
+    ctx.lineWidth = U * 0.25;
     for (const s of [-1, 1]) {
       ctx.beginPath();
       ctx.moveTo(L * 0.1, s * w * 0.12);
@@ -462,7 +521,7 @@
         const closedA = heading + frac * 0.35;
         const openA = heading + f.rot + frac * Math.PI * 2;
         const a = lerp(closedA, openA, open);
-        const w = R * lerp(0.09, inner ? 0.26 : 0.22, open) * (0.6 + 0.4 * bud);
+        const w = R * lerp(0.08, inner ? 0.19 : 0.17, open) * (0.6 + 0.4 * bud);
         const curl = (k % 2 ? 1 : -1) * R * 0.08 * open; // tips flick sideways as they recurve
         ctx.save();
         ctx.translate(C.x, C.y);
@@ -548,6 +607,17 @@
         ctx.beginPath(); ctx.moveTo(x0 - half + wob, y); ctx.lineTo(x0 + half + wob, y); ctx.stroke();
       }
     }
+    // The moon's reflection: a column of pale, shimmering dashes.
+    const m = moonGeom();
+    ctx.strokeStyle = COLORS.moon;
+    for (let y = waterTop + cellH * 0.8; y < worldH; y += cellH) {
+      const d = (y - waterTop) / depth;
+      const half = m.r * (0.55 - d * 0.3) * (0.6 + 0.4 * Math.sin(y * 0.7 + clock * 3));
+      const wob = Math.sin(y * 0.25 + clock * 1.6) * U;
+      ctx.globalAlpha = 0.5 * (1 - d * 0.6);
+      const mx = m.x - m.r * 0.45; // under the lit side of the crescent
+      ctx.beginPath(); ctx.moveTo(mx - half + wob, y); ctx.lineTo(mx + half + wob, y); ctx.stroke();
+    }
     ctx.globalAlpha = 1;
 
     const [cr, cg, cb] = COLORS.ripple;
@@ -597,6 +667,7 @@
     const { base, stems, fillers, cuts } = bouquet;
 
     drawStars(octx, clock);
+    drawMoon(octx, clock);
     for (const f of fillers) drawStem(octx, f, base, t);
     if (t > 0.2) {
       for (const cut of cuts) {
@@ -606,7 +677,14 @@
     }
     for (const st of stems) drawStem(octx, st, base, t);
     drawRibbon(octx, base);
-    for (const q of flowerQueue) q.open = drawFlower(octx, q.c, q.st, t);
+    for (const q of flowerQueue) {
+      q.open = drawFlower(octx, q.c, q.st, t);
+      const f = q.st.flower;
+      if (!f.chimed && q.open > 0.3) { // chime once as each lily opens
+        f.chimed = true;
+        window.BouquetAudio?.bloom(COLORS.flowers.indexOf(f.pal));
+      }
+    }
     drawWater(octx, clock);
   }
 
@@ -672,14 +750,26 @@
     const fade = clamp01((LOOP_SECONDS - t) / FADE_SECONDS);
     drawScene(t, now / 1000);
     renderAscii(fade);
+    // Breeze sound: the gust strength, swelling with each main sway of the stems.
+    window.BouquetAudio?.update(gustAt(t) * (0.6 + 0.4 * Math.abs(Math.sin(t * 0.9))));
     requestAnimationFrame(frame);
   }
 
   window.addEventListener('resize', () => { resize(); bouquet = buildBouquet(seed); });
-  window.addEventListener('pointerdown', restart);
+  // Browsers only allow sound after a click or key press, so the first one starts the music.
+  window.addEventListener('pointerdown', () => {
+    window.BouquetAudio?.start();
+    restart();
+  });
   window.addEventListener('keydown', e => {
     if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
     e.preventDefault();
+    const audio = window.BouquetAudio;
+    if (e.key === 'm' || e.key === 'M') { // M toggles sound without replanting
+      if (audio) audio.isStarted() ? audio.toggleMute() : audio.start();
+      return;
+    }
+    audio?.start();
     restart();
   });
 
