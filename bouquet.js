@@ -36,6 +36,10 @@
     anther: '#c8743c',
     pistil: '#cfe3a6',
     stars: ['#ffffff', '#dfe9ff', '#ffe3ee', '#fff4d6'],
+    moon: '#fbf6dc',
+    moonShade: '#e9e0b8',
+    moonCrater: '#d6cca2',
+    moonHalo: 'rgba(251, 246, 220, 0.2)',
     waterTop: 'rgba(58, 96, 140, 0.7)',
     waterDeep: 'rgba(20, 36, 62, 0.9)',
     ripple: [150, 200, 235],
@@ -145,12 +149,16 @@
     const r = mulberry32(20261102);
     const skyRows = Math.max(1, Math.floor(waterTop / cellH) - 1);
     const count = Math.floor(cols * skyRows * 0.012);
+    const moon = moonGeom();
     stars = [];
     for (let i = 0; i < count; i++) {
       const bright = r() < 0.1;
+      const col = Math.floor(r() * cols), row = Math.floor(r() * skyRows);
+      // No stars inside the moon or its halo.
+      if (Math.hypot((col + 0.5) * cellW - moon.x, (row + 0.5) * cellH - moon.y) < moon.r * 2.4) continue;
       stars.push({
-        col: Math.floor(r() * cols),
-        row: Math.floor(r() * skyRows),
+        col,
+        row,
         level: bright ? 0.4 + r() * 0.2 : 0.07 + r() * 0.2,
         speed: 0.5 + r() * 1.5,
         phase: r() * Math.PI * 2,
@@ -167,6 +175,50 @@
       ctx.fillRect(s.col * cellW, s.row * cellH, cellW, cellH);
     }
     ctx.globalAlpha = 1;
+  }
+
+  // ---------- Moon ----------
+  function moonGeom() {
+    return { x: worldW - U * 14, y: U * 14, r: U * 6 };
+  }
+  // Craters sit on the lit (left) side of the crescent.
+  const MOON_CRATERS = [
+    { x: -0.6, y: -0.15, r: 0.14 },
+    { x: -0.45, y: 0.4, r: 0.12 },
+    { x: -0.2, y: 0.7, r: 0.08 },
+  ];
+  // The circle "bitten out" of the moon to make the crescent shape.
+  const MOON_SHADOW = { x: 0.45, y: -0.2, r: 0.9 };
+
+  // A crescent moon in the top-right corner, with craters and a softly pulsing halo.
+  function drawMoon(ctx, clock) {
+    const m = moonGeom();
+    const halo = ctx.createRadialGradient(m.x, m.y, m.r * 0.9, m.x, m.y, m.r * 2.2);
+    halo.addColorStop(0, COLORS.moonHalo);
+    halo.addColorStop(1, 'rgba(251, 246, 220, 0)');
+    ctx.globalAlpha = 0.85 + 0.15 * Math.sin(clock * 0.5);
+    ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+
+    const disc = ctx.createRadialGradient(m.x - m.r * 0.6, m.y, 0, m.x, m.y, m.r);
+    disc.addColorStop(0, COLORS.moon);
+    disc.addColorStop(1, COLORS.moonShade);
+    ctx.fillStyle = disc;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = COLORS.moonCrater;
+    for (const c of MOON_CRATERS) {
+      ctx.beginPath(); ctx.arc(m.x + c.x * m.r, m.y + c.y * m.r, c.r * m.r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Erase an offset circle to leave a crescent. 'destination-out' cuts a hole
+    // in what's already drawn, so the dark sky shows through.
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.arc(m.x + MOON_SHADOW.x * m.r, m.y + MOON_SHADOW.y * m.r, MOON_SHADOW.r * m.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   // ---------- Breeze ----------
@@ -548,6 +600,17 @@
         ctx.beginPath(); ctx.moveTo(x0 - half + wob, y); ctx.lineTo(x0 + half + wob, y); ctx.stroke();
       }
     }
+    // The moon's reflection: a column of pale, shimmering dashes.
+    const m = moonGeom();
+    ctx.strokeStyle = COLORS.moon;
+    for (let y = waterTop + cellH * 0.8; y < worldH; y += cellH) {
+      const d = (y - waterTop) / depth;
+      const half = m.r * (0.55 - d * 0.3) * (0.6 + 0.4 * Math.sin(y * 0.7 + clock * 3));
+      const wob = Math.sin(y * 0.25 + clock * 1.6) * U;
+      ctx.globalAlpha = 0.5 * (1 - d * 0.6);
+      const mx = m.x - m.r * 0.45; // under the lit side of the crescent
+      ctx.beginPath(); ctx.moveTo(mx - half + wob, y); ctx.lineTo(mx + half + wob, y); ctx.stroke();
+    }
     ctx.globalAlpha = 1;
 
     const [cr, cg, cb] = COLORS.ripple;
@@ -597,6 +660,7 @@
     const { base, stems, fillers, cuts } = bouquet;
 
     drawStars(octx, clock);
+    drawMoon(octx, clock);
     for (const f of fillers) drawStem(octx, f, base, t);
     if (t > 0.2) {
       for (const cut of cuts) {
