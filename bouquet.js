@@ -221,10 +221,15 @@
   }
 
   // ---------- Breeze ----------
+  // Overall wind strength (0.3..1), rising and falling over about 48 seconds.
+  // Shared by the swaying stems and the breeze sound, so what you hear matches what you see.
+  function gustAt(t) {
+    return 0.65 + 0.35 * Math.sin(t * 0.13 + 1.3);
+  }
+
   // A few layered sine waves plus a slow gust envelope feel organic.
   function breeze(t, phase) {
-    const gust = 0.65 + 0.35 * Math.sin(t * 0.13 + 1.3);
-    return gust * (Math.sin(t * 0.9 + phase) * 0.6 +
+    return gustAt(t) * (Math.sin(t * 0.9 + phase) * 0.6 +
                    Math.sin(t * 0.37 + phase * 1.7) * 0.3 +
                    Math.sin(t * 2.3 + phase * 0.6) * 0.1);
   }
@@ -745,6 +750,8 @@
     const fade = clamp01((LOOP_SECONDS - t) / FADE_SECONDS);
     drawScene(t, now / 1000);
     renderAscii(fade);
+    // Breeze sound: the gust strength, swelling with each main sway of the stems.
+    window.BouquetAudio?.update(gustAt(t) * (0.6 + 0.4 * Math.abs(Math.sin(t * 0.9))));
     requestAnimationFrame(frame);
   }
 

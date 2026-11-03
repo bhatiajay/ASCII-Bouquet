@@ -1,14 +1,16 @@
-// audio.js — generated music for ASCII Bouquet, using the Web Audio API.
+// audio.js — generated music and night-time ambience for ASCII Bouquet, using the Web Audio API.
 // No audio files are loaded: every sound is synthesized in code.
 //
 // Signal chain:
-//   instruments -> musicBus -> master gain -> compressor -> speakers
-//                          \-> reverb send -> reverb ----^
+//   instruments -> musicBus ----> master gain -> compressor -> speakers
+//   night sounds -> ambienceBus -^      ^
+//            both  \-> reverb send -> reverb
 //
 // Used by bouquet.js through window.BouquetAudio:
 //   start()       create/resume audio (browsers only allow this after a click or key press)
 //   toggleMute()  fade all sound out or back in
 //   bloom(i)      play a chime when a lily opens (i = palette index: 0 blue, 1 pink)
+//   update(gust)  called every frame with the breeze strength (about 0.2..1)
 //   isStarted()   whether start() has been called
 (() => {
   'use strict';
@@ -36,9 +38,11 @@
 
   // ---------- State ----------
   let ctx = null;
-  let master, musicBus;
+  let master, musicBus, ambienceBus, breezeGain;
   let muted = false;
   let nextNoteTime = 0, nextChordTime = 0, chordIndex = 0, melodyStep = 4;
+  let nextCricketTime = 0, nextOwlTime = 0, lastBreezeUpdate = 0;
+  const rnd = (a, b) => a + (b - a) * Math.random();
 
   // ---------- Setup ----------
   // Reverb from a generated "impulse response": stereo noise that fades out.
@@ -76,8 +80,19 @@
     musicBus.connect(master);
     musicBus.connect(reverbSend);
 
+    ambienceBus = ctx.createGain();
+    ambienceBus.connect(master);
+    const ambienceVerb = ctx.createGain(); // night sounds get a little reverb, for distance
+    ambienceVerb.gain.value = 0.3;
+    ambienceBus.connect(ambienceVerb);
+    ambienceVerb.connect(reverbSend);
+    startWater();
+    startBreeze();
+
     master.gain.setTargetAtTime(MASTER_VOLUME, ctx.currentTime, 1.5); // gentle fade-in
     nextNoteTime = nextChordTime = ctx.currentTime + 0.1;
+    nextCricketTime = ctx.currentTime + rnd(0.5, 2);
+    nextOwlTime = ctx.currentTime + rnd(15, 30);
     setInterval(schedule, TICK_MS);
 
     // Pause the sound while the tab is hidden, and pick up again when it's visible.
@@ -150,6 +165,101 @@
     musicBox(mtof(SCALE[melodyStep]), time, 0.12);
   }
 
+  // ---------- Night ambience ----------
+  // Two seconds of white noise, looped: the raw material for water and wind.
+  function noiseSource() {
+    const length = ctx.sampleRate * 2;
+    const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    return src;
+  }
+
+  // A slow wobble (low-frequency oscillator) added onto an audio parameter.
+  function lfo(param, rate, depth) {
+    const osc = ctx.createOscillator();
+    const amount = ctx.createGain();
+    osc.frequency.value = rate;
+    amount.gain.value = depth;
+    osc.connect(amount);
+    amount.connect(param);
+    osc.start();
+  }
+
+  // Water lapping: deep, muffled noise that slowly swells and recedes.
+  function startWater() {
+    const src = noiseSource();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 380;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.05;
+    lfo(gain.gain, 0.17, 0.03);          // swell...
+    lfo(filter.frequency, 0.23, 140);    // ...and brighten as each wave laps in
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ambienceBus);
+    src.start();
+  }
+
+  // Breeze: airy band-passed noise. Its volume is set by update() to match the stems.
+  function startBreeze() {
+    const src = noiseSource();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 700;
+    filter.Q.value = 0.6;
+    lfo(filter.frequency, 0.11, 250); // the "whoosh" drifts in pitch
+    breezeGain = ctx.createGain();
+    breezeGain.gain.value = 0.02;
+    src.connect(filter);
+    filter.connect(breezeGain);
+    breezeGain.connect(panned(ambienceBus, 0));
+    src.start();
+  }
+
+  // Cricket: a quick train of 3–4 high chirps, somewhere to the left or right.
+  function cricket(time) {
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    osc.frequency.value = rnd(4200, 4900);
+    env.gain.setValueAtTime(0, time);
+    const chirps = 3 + Math.floor(Math.random() * 2);
+    const volume = rnd(0.008, 0.02); // some crickets are nearer than others
+    for (let i = 0; i < chirps; i++) {
+      const t = time + i * 0.07;
+      env.gain.setValueAtTime(0, t);
+      env.gain.linearRampToValueAtTime(volume, t + 0.01);
+      env.gain.linearRampToValueAtTime(0, t + 0.04);
+    }
+    osc.connect(env);
+    env.connect(panned(ambienceBus, rnd(-0.9, 0.9)));
+    osc.start(time);
+    osc.stop(time + chirps * 0.07 + 0.1);
+  }
+
+  // Owl: two soft "hoo"s that sag slightly in pitch.
+  function owl(time) {
+    const pan = rnd(-0.7, 0.7);
+    for (const [start, len, f0, f1] of [[0, 0.35, 390, 350], [0.6, 0.55, 370, 320]]) {
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      const t = time + start;
+      osc.frequency.setValueAtTime(f0, t);
+      osc.frequency.exponentialRampToValueAtTime(f1, t + len);
+      env.gain.setValueAtTime(0, t);
+      env.gain.linearRampToValueAtTime(0.05, t + 0.06);
+      env.gain.linearRampToValueAtTime(0, t + len);
+      osc.connect(env);
+      env.connect(panned(ambienceBus, pan));
+      osc.start(t);
+      osc.stop(t + len + 0.05);
+    }
+  }
+
   // ---------- Scheduler ----------
   // Wakes every TICK_MS and queues any notes due in the next LOOKAHEAD seconds,
   // timed exactly on the audio clock (setInterval alone is too jittery for music).
@@ -158,7 +268,18 @@
     // If we fell behind (e.g. the tab was asleep), skip ahead instead of playing a pile-up.
     if (nextNoteTime < now) nextNoteTime = now + 0.05;
     if (nextChordTime < now - 1) nextChordTime = now + 0.05;
+    if (nextCricketTime < now) nextCricketTime = now + 0.05;
+    if (nextOwlTime < now) nextOwlTime = now + rnd(20, 50);
     const until = now + LOOKAHEAD;
+
+    while (nextCricketTime < until) {
+      cricket(nextCricketTime);
+      nextCricketTime += rnd(0.4, 2.2);
+    }
+    if (nextOwlTime < until) {
+      owl(nextOwlTime);
+      nextOwlTime += rnd(25, 60); // owls are rare
+    }
 
     while (nextChordTime < until) {
       pad(CHORDS[chordIndex], nextChordTime, CHORD_SECONDS);
@@ -200,5 +321,15 @@
     notes.forEach((n, i) => musicBox(mtof(n), t + i * 0.09, 0.07, 3.5));
   }
 
-  window.BouquetAudio = { start, toggleMute, bloom, isStarted: () => ctx !== null };
+  // The breeze gets louder as the animation's gusts get stronger. Called every
+  // frame, but only passed to the audio engine about 5 times a second.
+  function update(gust) {
+    if (!ctx || !breezeGain) return;
+    const now = ctx.currentTime;
+    if (now - lastBreezeUpdate < 0.2) return;
+    lastBreezeUpdate = now;
+    breezeGain.gain.setTargetAtTime(0.004 + 0.05 * gust * gust, now, 0.4);
+  }
+
+  window.BouquetAudio = { start, toggleMute, bloom, update, isStarted: () => ctx !== null };
 })();

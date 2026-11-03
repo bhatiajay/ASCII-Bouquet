@@ -9,9 +9,9 @@ A procedural ASCII art animation of a blooming lily bouquet under a starry sky, 
 - A gentle breeze that sways the taller stems more
 - A vector-to-ASCII pipeline: shapes are painted onto a low-res offscreen canvas, each pixel's brightness picks a character from ` .:-=+*cxoaX#%&@`, and the glyphs are colored over a soft glow
 - A pastel palette: baby blue and baby pink petals with blushing tips and dark centers
-
 - A crescent moon in the corner, reflected in the water
 - Generated music (no audio files): a soft chord pad and a wandering music-box melody, with a chime as each lily opens
+- Night-time ambience: crickets, lapping water, a breeze that rises and falls with the swaying stems, and the occasional owl
 
 ## Run it
 
