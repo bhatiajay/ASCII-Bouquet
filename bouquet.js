@@ -13,8 +13,6 @@
   const WATER_RAMP = ' .,-~~≈';     // a softer, wavier ramp used below the waterline
   const FONT_SIZE = 10;              // px size of each glyph
   const SUPERSAMPLE = 2;             // offscreen pixels per cell, per axis (smoother edges)
-  const LOOP_SECONDS = 30;           // auto-replant after this many seconds
-  const FADE_SECONDS = 1.5;          // fade-out before an automatic replant
   const GOLDEN_ANGLE = 2.39996;      // phyllotaxis angle used to spiral the leaves
 
   const COLORS = {
@@ -235,9 +233,9 @@
   }
 
   // The stem's curve this frame: its rest shape plus a sideways sway that grows
-  // towards the tip (taller stems have a bigger swayAmp).
+  // towards the tip (taller stems have a bigger swayAmp), plus any wobble from the cat's paw.
   function curveAt(st, p0, t) {
-    const dx = breeze(t, st.phase) * st.swayAmp;
+    const dx = breeze(t, st.phase) * st.swayAmp + st.poke.x;
     const [o1, o2, o3] = st.off;
     return [
       p0,
@@ -275,6 +273,8 @@
     const kind = opts.kind;
     const st = {
       kind,
+      a,                    // lean angle (0 = straight up), used to find the stems the cat bats at
+      poke: { x: 0, v: 0 }, // a springy sideways wobble at the tip, set off by the cat's paw
       off: [
         { x: dir.x * h * 0.33 + perp.x * bend * 0.3, y: dir.y * h * 0.33 + perp.y * bend * 0.3 },
         { x: dir.x * h * 0.7 + perp.x * bend,        y: dir.y * h * 0.7 + perp.y * bend },
@@ -607,6 +607,8 @@
         ctx.beginPath(); ctx.moveTo(x0 - half + wob, y); ctx.lineTo(x0 + half + wob, y); ctx.stroke();
       }
     }
+    ctx.globalAlpha = 1;
+    window.BouquetCat?.drawReflection(ctx, clock);
     // The moon's reflection: a column of pale, shimmering dashes.
     const m = moonGeom();
     ctx.strokeStyle = COLORS.moon;
@@ -685,24 +687,25 @@
         window.BouquetAudio?.bloom(COLORS.flowers.indexOf(f.pal));
       }
     }
+    window.BouquetCat?.draw(octx); // before the water, so a cat in the water looks submerged
     drawWater(octx, clock);
+    window.BouquetCat?.drawSplash(octx);
   }
 
   // ---------- Pixels -> ASCII ----------
-  function renderAscii(fade) {
+  function renderAscii() {
     sctx.globalAlpha = 1;
     sctx.fillStyle = COLORS.bg;
     sctx.fillRect(0, 0, viewW, viewH);
 
     // Subtle background glow: the low-res image, blurred and stretched behind the text.
     sctx.save();
-    sctx.globalAlpha = 0.4 * fade;
+    sctx.globalAlpha = 0.4;
     sctx.filter = `blur(${Math.round(cellH * 0.9)}px)`;
     sctx.imageSmoothingEnabled = true;
     sctx.drawImage(off, gridX, gridY, worldW, worldH);
     sctx.restore();
 
-    sctx.globalAlpha = fade;
     sctx.font = FONT;
     sctx.textBaseline = 'top';
     const data = octx.getImageData(0, 0, off.width, off.height).data;
@@ -732,11 +735,45 @@
         sctx.fillText(ramp[idx], gridX + x * cellW, gridY + y * cellH);
       }
     }
-    sctx.globalAlpha = 1;
+  }
+
+  // ---------- The cat's paw on the stems ----------
+  // The cat bats at the stems that lean towards its paw. Each stem's tip has a
+  // springy offset (st.poke) that curveAt() adds to the breeze sway.
+  function pokeStems(px, py, push) {
+    const base = bouquet.base;
+    const ang = Math.atan2(px - base.x, base.y - py); // same convention as each stem's lean `a`
+    for (const list of [bouquet.stems, bouquet.fillers]) {
+      for (const st of list) {
+        const near = Math.exp(-(((st.a - ang) / 0.35) ** 2));
+        st.poke.v += push * near * U * 38;
+      }
+    }
+  }
+
+  function stepPokes(dt) {
+    for (const list of [bouquet.stems, bouquet.fillers]) {
+      for (const st of list) {
+        const p = st.poke;
+        p.v += (-22 * p.x - 2.4 * p.v) * dt; // a soft, slowly settling spring
+        p.x += p.v * dt;
+      }
+    }
+  }
+
+  // What the cat needs to know about the scene (all in world pixels).
+  function catWorld(t, clock) {
+    return {
+      U, worldW, worldH, waterTop, cellW, cellH,
+      surfaceY: x => waterTop + waveY(x, clock),
+      base: bouquet.base,
+      grown: t > 6, // the stems are up, so there's something to bat at
+      pokeStems,
+    };
   }
 
   // ---------- Main loop & interaction ----------
-  let seed, start, bouquet;
+  let seed, start, bouquet, lastNow = null;
 
   function restart() {
     seed = (Math.random() * 2 ** 32) >>> 0;
@@ -745,22 +782,60 @@
   }
 
   function frame(now) {
-    let t = (now - start) / 1000;
-    if (t > LOOP_SECONDS) { restart(); t = 0; }
-    const fade = clamp01((LOOP_SECONDS - t) / FADE_SECONDS);
-    drawScene(t, now / 1000);
-    renderAscii(fade);
+    const t = (now - start) / 1000, clock = now / 1000;
+    const dt = lastNow === null ? 0 : Math.min(0.05, (now - lastNow) / 1000);
+    lastNow = now;
+    stepPokes(dt);
+    window.BouquetCat?.step(dt, clock, catWorld(t, clock));
+    drawScene(t, clock);
+    renderAscii();
     // Breeze sound: the gust strength, swelling with each main sway of the stems.
     window.BouquetAudio?.update(gustAt(t) * (0.6 + 0.4 * Math.abs(Math.sin(t * 0.9))));
     requestAnimationFrame(frame);
   }
 
-  window.addEventListener('resize', () => { resize(); bouquet = buildBouquet(seed); });
-  // Browsers only allow sound after a click or key press, so the first one starts the music.
-  window.addEventListener('pointerdown', () => {
+  window.addEventListener('resize', () => {
+    const oldW = worldW;
+    resize();
+    bouquet = buildBouquet(seed);
+    window.BouquetCat?.resize(oldW, worldW);
+  });
+
+  // Pointer position in world coordinates.
+  const worldPoint = e => ({ x: e.clientX - gridX, y: e.clientY - gridY });
+
+  // Press on the cat's scruff to pick it up, on its body to startle it, anywhere else to replant.
+  // Browsers only allow sound after a click or key press, so the first one also starts the music.
+  screen.addEventListener('pointerdown', e => {
+    const cat = window.BouquetCat;
+    const p = worldPoint(e);
     window.BouquetAudio?.start();
+    if (cat && e.button === 0) {
+      if (cat.hitScruff(p.x, p.y)) {
+        screen.setPointerCapture(e.pointerId);
+        screen.style.cursor = 'grabbing';
+        cat.grab(p.x, p.y, e.timeStamp);
+        return;
+      }
+      if (cat.hitBody(p.x, p.y)) { cat.poke(); return; }
+    }
     restart();
   });
+  screen.addEventListener('pointermove', e => {
+    const cat = window.BouquetCat;
+    if (!cat) return;
+    const p = worldPoint(e);
+    if (cat.isHeld()) cat.drag(p.x, p.y, e.timeStamp);
+    else screen.style.cursor = cat.hitScruff(p.x, p.y) ? 'grab' : '';
+  });
+  const letGo = e => {
+    const cat = window.BouquetCat;
+    if (!cat?.isHeld()) return;
+    cat.release(e.timeStamp);
+    screen.style.cursor = 'grab';
+  };
+  screen.addEventListener('pointerup', letGo);
+  screen.addEventListener('pointercancel', letGo);
   window.addEventListener('keydown', e => {
     if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
     e.preventDefault();
