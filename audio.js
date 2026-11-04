@@ -5,12 +5,15 @@
 //   instruments -> musicBus ----> master gain -> compressor -> speakers
 //   night sounds -> ambienceBus -^      ^
 //            both  \-> reverb send -> reverb
+//   cat sounds -> sfxBus -> compressor (skips the master fade-in, so the first meow is heard)
 //
 // Used by bouquet.js through window.BouquetAudio:
 //   start()       create/resume audio (browsers only allow this after a click or key press)
 //   toggleMute()  fade all sound out or back in
 //   bloom(i)      play a chime when a lily opens (i = palette index: 0 blue, 1 pink)
 //   update(gust)  called every frame with the breeze strength (about 0.2..1)
+//   meow(kind, pan)    the cat: 'grab' is a long complaint, 'chirp' a short trill (pan -1..1)
+//   splash(size, pan)  the cat landing in the water (size 0..1)
 //   isStarted()   whether start() has been called
 (() => {
   'use strict';
@@ -38,7 +41,7 @@
 
   // ---------- State ----------
   let ctx = null;
-  let master, musicBus, ambienceBus, breezeGain;
+  let master, musicBus, ambienceBus, breezeGain, sfxBus;
   let muted = false;
   let nextNoteTime = 0, nextChordTime = 0, chordIndex = 0, melodyStep = 4;
   let nextCricketTime = 0, nextOwlTime = 0, lastBreezeUpdate = 0;
@@ -86,6 +89,16 @@
     ambienceVerb.gain.value = 0.3;
     ambienceBus.connect(ambienceVerb);
     ambienceVerb.connect(reverbSend);
+
+    // Sound effects go straight to the compressor. The master gain fades in slowly,
+    // and the first click (which starts the audio) may well be the one that grabs the cat.
+    sfxBus = ctx.createGain();
+    sfxBus.gain.value = MASTER_VOLUME;
+    sfxBus.connect(compressor);
+    const sfxVerb = ctx.createGain();
+    sfxVerb.gain.value = 0.25;
+    sfxBus.connect(sfxVerb);
+    sfxVerb.connect(reverbSend);
     startWater();
     startBreeze();
 
@@ -307,6 +320,7 @@
     if (!ctx) return;
     muted = !muted;
     master.gain.setTargetAtTime(muted ? 0 : MASTER_VOLUME, ctx.currentTime, 0.3);
+    sfxBus.gain.setTargetAtTime(muted ? 0 : MASTER_VOLUME, ctx.currentTime, 0.3);
   }
 
   // A little rising arpeggio: blue lilies chime higher, pink ones a bit lower.
@@ -331,5 +345,132 @@
     breezeGain.gain.setTargetAtTime(0.004 + 0.05 * gust * gust, now, 0.4);
   }
 
-  window.BouquetAudio = { start, toggleMute, bloom, update, isStarted: () => ctx !== null };
+  // ---------- The cat ----------
+  // Meow: a buzzy sawtooth "voice" through two vowel-like band-pass filters (formants).
+  // The formants glide from "ee" through "ah" to "oo" while the pitch rises and falls: mi-a-ow.
+  let lastMeow = -Infinity;
+  function meow(kind = 'grab', pan = 0) {
+    if (!ctx || muted) return;
+    const now = ctx.currentTime;
+    if (now - lastMeow < 0.5) return;
+    lastMeow = now;
+    const t = now + 0.01;
+    const chirp = kind === 'chirp';
+    const dur = chirp ? rnd(0.18, 0.26) : rnd(0.55, 0.8);
+    const f0 = (chirp ? 640 : 500) * rnd(0.88, 1.15); // every meow is a little different
+
+    const voice = ctx.createOscillator();
+    voice.type = 'sawtooth';
+    voice.frequency.setValueAtTime(f0, t);
+    if (chirp) { // a quick rising "mrrp?"
+      voice.frequency.exponentialRampToValueAtTime(f0 * 1.45, t + dur * 0.7);
+      voice.frequency.exponentialRampToValueAtTime(f0 * 1.25, t + dur);
+    } else {     // up, then a long fall
+      voice.frequency.exponentialRampToValueAtTime(f0 * 1.5, t + dur * 0.3);
+      voice.frequency.exponentialRampToValueAtTime(f0 * 0.75, t + dur);
+    }
+    const vibrato = ctx.createOscillator();
+    const vibratoDepth = ctx.createGain();
+    vibrato.frequency.value = rnd(5, 7);
+    vibratoDepth.gain.value = f0 * 0.025;
+    vibrato.connect(vibratoDepth);
+    vibratoDepth.connect(voice.frequency);
+
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(0.4, t + 0.04);
+    env.gain.setValueAtTime(0.4, t + dur * 0.6);
+    env.gain.linearRampToValueAtTime(0, t + dur);
+    env.connect(panned(sfxBus, pan));
+
+    // [start, middle, end] frequency of each formant, and its level.
+    const formants = chirp
+      ? [[[500, 900, 800], 1], [[2000, 2400, 2200], 0.5]]
+      : [[[450, 1000, 550], 1], [[2300, 1600, 900], 0.55]];
+    for (const [[a, b, c], level] of formants) {
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.Q.value = 5;
+      filter.frequency.setValueAtTime(a, t);
+      filter.frequency.linearRampToValueAtTime(b, t + dur * 0.35);
+      filter.frequency.linearRampToValueAtTime(c, t + dur);
+      const g = ctx.createGain();
+      g.gain.value = level;
+      voice.connect(filter);
+      filter.connect(g);
+      g.connect(env);
+    }
+    voice.start(t);
+    voice.stop(t + dur + 0.05);
+    vibrato.start(t);
+    vibrato.stop(t + dur + 0.05);
+  }
+
+  // One short noise buffer, shared by every splash.
+  let splashNoise = null;
+  function noiseBuffer() {
+    if (!splashNoise) {
+      const length = ctx.sampleRate * 2;
+      splashNoise = ctx.createBuffer(1, length, ctx.sampleRate);
+      const data = splashNoise.getChannelData(0);
+      for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+    }
+    return splashNoise;
+  }
+
+  // Splash: a burst of noise whose pitch falls as the water closes, a low "plunk",
+  // then a few droplets landing.
+  function splash(size = 0.5, pan = 0) {
+    if (!ctx || muted) return;
+    const t = ctx.currentTime + 0.01;
+    const dur = 0.35 + 0.45 * size;
+    const out = panned(sfxBus, pan);
+
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuffer();
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.Q.value = 0.9;
+    filter.frequency.setValueAtTime(2600, t);
+    filter.frequency.exponentialRampToValueAtTime(380, t + dur);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(0.25 + 0.35 * size, t + 0.012);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(filter);
+    filter.connect(env);
+    env.connect(out);
+    src.start(t, Math.random() * 1.5);
+    src.stop(t + dur + 0.05);
+
+    const plunk = ctx.createOscillator();
+    const plunkEnv = ctx.createGain();
+    plunk.frequency.setValueAtTime(140, t);
+    plunk.frequency.exponentialRampToValueAtTime(55, t + 0.18);
+    plunkEnv.gain.setValueAtTime(0.3 * size + 0.05, t);
+    plunkEnv.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    plunk.connect(plunkEnv);
+    plunkEnv.connect(out);
+    plunk.start(t);
+    plunk.stop(t + 0.22);
+
+    const droplets = 3 + Math.round(size * 5);
+    for (let i = 0; i < droplets; i++) {
+      const dt = t + rnd(0.12, 0.25 + 0.5 * size);
+      const f = rnd(1200, 2600);
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.frequency.setValueAtTime(f, dt);
+      osc.frequency.exponentialRampToValueAtTime(f * 1.6, dt + 0.05);
+      g.gain.setValueAtTime(0, dt);
+      g.gain.linearRampToValueAtTime(0.05, dt + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, dt + 0.07);
+      osc.connect(g);
+      g.connect(out);
+      osc.start(dt);
+      osc.stop(dt + 0.08);
+    }
+  }
+
+  window.BouquetAudio = { start, toggleMute, bloom, update, meow, splash, isStarted: () => ctx !== null };
 })();

@@ -6,7 +6,7 @@
   <title>ASCII Bouquet</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0d0b12; overflow: hidden; }
-    canvas { display: block; cursor: pointer; }
+    canvas { display: block; cursor: pointer; touch-action: none; }
     #hint {
       position: fixed; bottom: 10px; left: 0; right: 0; text-align: center;
       font: 12px ui-monospace, Menlo, Consolas, monospace; color: #6e6680;
@@ -16,8 +16,9 @@
 </head>
 <body>
   <canvas id="screen"></canvas>
-  <div id="hint">click or press any key to replant · M to toggle sound</div>
+  <div id="hint">drag the cat by the scruff of its neck · click elsewhere or press any key to replant · M to toggle sound</div>
   <script src="audio.js"></script>
+  <script src="cat.js"></script>
   <script src="bouquet.js"></script>
 </body>
 </html>
