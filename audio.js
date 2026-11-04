@@ -1,18 +1,19 @@
 // audio.js — generated music and night-time ambience for ASCII Bouquet, using the Web Audio API.
-// No audio files are loaded: every sound is synthesized in code.
+// Everything is synthesized in code except the cat's meows, which are real recordings in sounds/.
 //
 // Signal chain:
 //   instruments -> musicBus ----> master gain -> compressor -> speakers
 //   night sounds -> ambienceBus -^      ^
 //            both  \-> reverb send -> reverb
-//   cat sounds -> sfxBus -> compressor (skips the master fade-in, so the first meow is heard)
+//   splashes -> sfxBus -> compressor (skips the master fade-in, so they're heard straight away)
+//   meows: played by <audio> elements (see meow() for why)
 //
 // Used by bouquet.js through window.BouquetAudio:
 //   start()       create/resume audio (browsers only allow this after a click or key press)
 //   toggleMute()  fade all sound out or back in
 //   bloom(i)      play a chime when a lily opens (i = palette index: 0 blue, 1 pink)
 //   update(gust)  called every frame with the breeze strength (about 0.2..1)
-//   meow(kind, pan)    the cat: 'grab' is a long complaint, 'chirp' a short trilled "mrrp?" (pan -1..1)
+//   meow(kind)         the cat: 'grab' plays a full meow, 'chirp' a short "mew"
 //   splash(size, pan)  the cat landing in the water (size 0..1)
 //   isStarted()   whether start() has been called
 (() => {
@@ -346,141 +347,38 @@
   }
 
   // ---------- The cat ----------
-  // A meow is a vowel glide, roughly "m-i-a-ow": the mouth opens from a closed hum to a wide
-  // "ah", then closes to "ow", while the pitch rises and falls. It's synthesized like a voice:
-  //   voice (harmonics that fall off like vocal folds, with vibrato and jitter) + a little breath
-  //   -> three formant filters (the resonances of the throat and mouth)
-  //   -> a low-pass "lips" filter (closed = the muffled "m", open = the bright "ah")
-  //   -> volume envelope
-  // A cat's vocal tract is short, so its formants sit higher than a person's.
-  //
-  // Each kind is a list of keyframes: [time 0..1, pitch Hz, F1, F2, F3 Hz, lips Hz, volume 0..1].
-  const MEOWS = {
-    grab: { // an indignant "mrrAOWww"
-      dur: [0.75, 1], breath: 0.18,
-      keys: [
-        [0,    560,  600, 2000, 3600,  700, 0],
-        [0.08, 600,  600, 2300, 3600,  900, 0.25], // m: mouth closed, a nasal hum
-        [0.2,  720,  850, 2700, 3800, 3500, 0.7],  // i: opening
-        [0.42, 880, 1300, 2100, 3600, 7000, 1],    // a: wide open, highest pitch
-        [0.66, 760, 1150, 1700, 3400, 5500, 0.85],
-        [0.86, 600,  800, 1300, 3200, 2500, 0.45], // ow: closing
-        [1,    480,  650, 1100, 3000, 1200, 0],
-      ],
-    },
-    chirp: { // a short, rising, trilled "mrrp?" with the mouth nearly closed
-      dur: [0.22, 0.3], breath: 0.08, trill: 27,
-      keys: [
-        [0,    700,  600, 1800, 3400,  900, 0],
-        [0.15, 720,  650, 1900, 3400, 1400, 0.6],
-        [0.6,  900,  900, 2200, 3600, 2600, 0.7],
-        [1,   1050,  800, 2000, 3500, 1800, 0],
-      ],
-    },
+  // Meows are real recordings of cats (CC0, see sounds/CREDITS.md). They play through
+  // <audio> elements: when index.html is opened straight from disk, browsers won't let the
+  // Web Audio API read local files, but <audio> can still play them.
+  const MEOW_FILES = {
+    grab: ['sounds/meow-1.wav', 'sounds/meow-2.wav'],
+    chirp: ['sounds/mew.wav'],
   };
-  const MEOW_VOLUME = 0.42;
-  let lastMeow = -Infinity, voiceWave = null;
+  const MEOW_VOLUME = 0.3;
+  let lastMeow = -Infinity, lastMeowFile = null, preloaded = null;
 
-  function meow(kind = 'grab', pan = 0) {
+  function meow(kind = 'grab') {
     if (!ctx || muted) return;
-    const now = ctx.currentTime;
-    if (now - lastMeow < 0.5) return;
+    if (!preloaded) { // fetch every clip once, so later meows start instantly
+      preloaded = Object.values(MEOW_FILES).flat().map(f => Object.assign(new Audio(f), { preload: 'auto' }));
+    }
+    const now = performance.now();
+    if (now - lastMeow < 500) return;
     lastMeow = now;
-    const shape = MEOWS[kind] || MEOWS.grab;
-    const t = now + 0.01;
-    const dur = rnd(shape.dur[0], shape.dur[1]);
-    const end = t + dur;
-    const pitch = rnd(0.88, 1.14);       // every meow is a little different...
-    const size = Math.sqrt(pitch);       // ...and a higher voice comes from a smaller mouth
-
-    // Voice: harmonics falling off about 8 dB per octave, like vocal folds.
-    // (A sawtooth's harmonics are much stronger, which sounds buzzy and electronic.)
-    if (!voiceWave) {
-      const real = new Float32Array(40), imag = new Float32Array(40);
-      for (let n = 1; n < 40; n++) imag[n] = Math.pow(n, -1.4);
-      voiceWave = ctx.createPeriodicWave(real, imag);
-    }
-    const voice = ctx.createOscillator();
-    voice.setPeriodicWave(voiceWave);
-    // Vibrato, plus jitter: a real voice never holds a perfectly steady pitch.
-    const vibrato = ctx.createOscillator(), vibratoDepth = ctx.createGain();
-    vibrato.frequency.value = rnd(5, 7);
-    vibratoDepth.gain.value = 18; // cents
-    vibrato.connect(vibratoDepth);
-    vibratoDepth.connect(voice.detune);
-    voice.detune.setValueAtTime(0, t);
-    for (let jt = t + 0.025; jt < end; jt += 0.025) voice.detune.linearRampToValueAtTime(rnd(-15, 15), jt);
-
-    // Breath: a little airy noise through the same mouth.
-    const breath = ctx.createBufferSource();
-    breath.buffer = noiseBuffer();
-    breath.loop = true;
-    const breathTone = ctx.createBiquadFilter();
-    breathTone.type = 'highpass';
-    breathTone.frequency.value = 1500;
-    const breathLevel = ctx.createGain();
-    breathLevel.gain.value = shape.breath;
-    breath.connect(breathTone);
-    breathTone.connect(breathLevel);
-
-    const throat = ctx.createGain();
-    voice.connect(throat);
-    breathLevel.connect(throat);
-    const lips = ctx.createBiquadFilter();
-    lips.type = 'lowpass';
-    lips.Q.value = 0.7;
-    const dry = ctx.createGain(); // a little of the unfiltered voice keeps it full
-    dry.gain.value = 0.12;
-    throat.connect(dry);
-    dry.connect(lips);
-    const formants = [[5, 1], [7, 0.55], [9, 0.3]].map(([q, level]) => {
-      const f = ctx.createBiquadFilter();
-      f.type = 'bandpass';
-      f.Q.value = q;
-      const g = ctx.createGain();
-      g.gain.value = level;
-      throat.connect(f);
-      f.connect(g);
-      g.connect(lips);
-      return f;
-    });
-
-    // Trill: a fast flutter in volume, like a rolled "rrr".
-    const env = ctx.createGain();
-    let out = lips;
-    if (shape.trill) {
-      const flutter = ctx.createGain(), lfo = ctx.createOscillator(), depth = ctx.createGain();
-      flutter.gain.value = 0.6;
-      lfo.frequency.value = shape.trill;
-      depth.gain.value = 0.4;
-      lfo.connect(depth);
-      depth.connect(flutter.gain);
-      lips.connect(flutter);
-      out = flutter;
-      lfo.start(t);
-      lfo.stop(end + 0.05);
-    }
-    out.connect(env);
-    env.connect(panned(sfxBus, pan));
-
-    // Follow the keyframes.
-    const params = [voice.frequency, ...formants.map(f => f.frequency), lips.frequency, env.gain];
-    const scale = [pitch, size, size, size, 1, MEOW_VOLUME];
-    shape.keys.forEach(([at, ...values], k) => {
-      const time = t + at * dur;
-      values.forEach((v, i) => {
-        if (k === 0) params[i].setValueAtTime(v * scale[i], time);
-        else params[i].linearRampToValueAtTime(v * scale[i], time);
-      });
-    });
-
-    voice.start(t);
-    vibrato.start(t);
-    breath.start(t, Math.random() * 1.5);
-    for (const node of [voice, vibrato, breath]) node.stop(end + 0.05);
+    const files = MEOW_FILES[kind] || MEOW_FILES.grab;
+    let file = files[Math.floor(Math.random() * files.length)];
+    if (files.length > 1 && file === lastMeowFile) file = files[(files.indexOf(file) + 1) % files.length];
+    lastMeowFile = file;
+    const clip = new Audio(file);
+    // Play each one a little faster or slower: the pitch shifts too, so it sounds like a
+    // slightly different meow (or cat) every time.
+    clip.preservesPitch = clip.mozPreservesPitch = clip.webkitPreservesPitch = false;
+    clip.playbackRate = kind === 'chirp' ? rnd(1.05, 1.25) : rnd(0.9, 1.1);
+    clip.volume = MEOW_VOLUME;
+    clip.play().catch(() => {}); // e.g. the file is missing: stay silent rather than break anything
   }
 
-  // One short noise buffer, shared by the splashes and the cat's breath.
+  // One short noise buffer, shared by every splash.
   let splashNoise = null;
   function noiseBuffer() {
     if (!splashNoise) {

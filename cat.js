@@ -173,7 +173,7 @@
 
   const faceScale = () => (face < 0 ? -1 : 1) * Math.max(0.08, Math.abs(face));
   const pan = () => clamp((pos.x / world.worldW) * 2 - 1, -1, 1) * 0.6;
-  const meow = kind => window.BouquetAudio?.meow(kind, pan());
+  const meow = kind => window.BouquetAudio?.meow(kind);
 
   // Cat space -> world pixels. Matches the canvas transform in applyTransform().
   function toWorld(q) {
