@@ -17,6 +17,8 @@
 
   const COLORS = {
     bg: '#0d0b12',
+    catGlow: [255, 241, 184], // pale moonlight yellow, around the cat while you hover over it
+    catTag: '#ffe9c7',
     stems: ['#5c9a58', '#4e8b4f', '#6aa862'],
     leaves: ['#6dbb6f', '#5aa35f', '#86c97f'],
     leafBack: '#477f4b',
@@ -111,6 +113,8 @@
   const sctx = screen.getContext('2d');
   const off = document.createElement('canvas');
   const octx = off.getContext('2d', { willReadFrequently: true });
+  const catLayer = document.createElement('canvas'); // the cat, so its glow can wrap its whole outline
+  const cctx = catLayer.getContext('2d');
   const FONT = `${FONT_SIZE}px ui-monospace, Menlo, Consolas, monospace`;
 
   let viewW, viewH, cols, rows, cellW, cellH, gridX, gridY, worldW, worldH, U, waterTop;
@@ -134,8 +138,8 @@
     worldH = rows * cellH;
     gridX = (viewW - worldW) / 2;
     gridY = (viewH - worldH) / 2;
-    off.width = cols * SUPERSAMPLE;
-    off.height = rows * SUPERSAMPLE;
+    off.width = catLayer.width = cols * SUPERSAMPLE;
+    off.height = catLayer.height = rows * SUPERSAMPLE;
     U = Math.min(worldH / 112, worldW / 125); // one "unit" scales the whole scene
     waterTop = worldH - U * 10;
     makeStars();
@@ -687,9 +691,39 @@
         window.BouquetAudio?.bloom(COLORS.flowers.indexOf(f.pal));
       }
     }
-    window.BouquetCat?.draw(octx); // before the water, so a cat in the water looks submerged
+    drawCat(); // before the water, so a cat in the water looks submerged
     drawWater(octx, clock);
     window.BouquetCat?.drawSplash(octx);
+  }
+
+  // The cat is painted on its own layer, then copied in with a single shadow, so the hover
+  // glow wraps its whole silhouette. (A shadow on each part would also glow along the
+  // inside edges, where the head meets the body and so on.) The ASCII pass then turns the
+  // glow into faint characters around it.
+  function drawCat() {
+    const cat = window.BouquetCat;
+    if (!cat) return;
+    cctx.setTransform(1, 0, 0, 1, 0, 0);
+    cctx.clearRect(0, 0, catLayer.width, catLayer.height);
+    cctx.setTransform(SUPERSAMPLE / cellW, 0, 0, SUPERSAMPLE / cellH, 0, 0);
+    cat.draw(cctx);
+    const glow = cat.glow();
+    octx.save();
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    if (glow > 0.01) {
+      // Only the shadow lands on the canvas: the layer itself is drawn far off to the left
+      // and its shadow shifted back into place. Two passes make the halo bright enough to
+      // read; then the cat itself goes on top, unchanged.
+      const [r, g, b] = COLORS.catGlow, away = catLayer.width * 2;
+      octx.shadowColor = `rgba(${r},${g},${b},${glow})`;
+      octx.shadowBlur = SUPERSAMPLE * 2.5; // about two to three characters
+      octx.shadowOffsetX = away;
+      for (let i = 0; i < 2; i++) octx.drawImage(catLayer, -away, 0);
+      octx.shadowColor = 'transparent';
+      octx.shadowOffsetX = 0;
+    }
+    octx.drawImage(catLayer, 0, 0);
+    octx.restore();
   }
 
   // ---------- Pixels -> ASCII ----------
@@ -735,6 +769,32 @@
         sctx.fillText(ramp[idx], gridX + x * cellW, gridY + y * cellH);
       }
     }
+    drawCatTag();
+  }
+
+  // Where the cat's name tag goes in the character grid: centred over its body, two rows
+  // above the row holding its highest point (so it clears the glow), kept on screen.
+  function tagCell(tag) {
+    sctx.font = FONT;
+    const text = `[ ${tag.text} ]`;
+    const w = sctx.measureText(text).width;
+    const col = Math.max(0, Math.min(cols - Math.ceil(w / cellW), Math.round((tag.x - w / 2) / cellW)));
+    const row = Math.max(0, Math.min(rows - 1, Math.floor(tag.y / cellH) - 2));
+    return { text, w, x: gridX + col * cellW, y: gridY + row * cellH };
+  }
+
+  // The cat's name tag, written into the character grid above its head on a dark backing.
+  function drawCatTag() {
+    const tag = window.BouquetCat?.tag();
+    if (!tag || tag.alpha < 0.02 || nameBoxOpen) return;
+    const { text, w, x, y } = tagCell(tag);
+    sctx.globalAlpha = tag.alpha * 0.85;
+    sctx.fillStyle = COLORS.bg;
+    sctx.fillRect(x - cellW * 0.5, y - cellH * 0.15, w + cellW, cellH * 1.3);
+    sctx.globalAlpha = tag.alpha;
+    sctx.fillStyle = COLORS.catTag;
+    sctx.fillText(text, x, y);
+    sctx.globalAlpha = 1;
   }
 
   // ---------- The cat's paw on the stems ----------
@@ -787,6 +847,7 @@
     lastNow = now;
     stepPokes(dt);
     window.BouquetCat?.step(dt, clock, catWorld(t, clock));
+    updateHover();
     drawScene(t, clock);
     renderAscii();
     // Breeze sound: the gust strength, swelling with each main sway of the stems.
@@ -804,12 +865,28 @@
   // Pointer position in world coordinates.
   const worldPoint = e => ({ x: e.clientX - gridX, y: e.clientY - gridY });
 
+  // Where the mouse last was. Hover is checked every frame, not just when the mouse moves,
+  // so the cat lights up when it walks under a resting pointer (and stops when it walks off).
+  const pointer = { x: 0, y: 0, inside: false };
+  function updateHover() {
+    const cat = window.BouquetCat;
+    if (!cat) return;
+    if (nameBoxOpen) cat.showTag(0.2); // keep it lit while you name it
+    if (cat.isHeld()) return;          // held: lit anyway, and the cursor stays 'grabbing'
+    const onScruff = pointer.inside && cat.hitScruff(pointer.x, pointer.y);
+    cat.setHover(onScruff || (pointer.inside && cat.hitBody(pointer.x, pointer.y)));
+    screen.style.cursor = onScruff ? 'grab' : '';
+  }
+
   // Press on the cat's scruff to pick it up, on its body to startle it, anywhere else to replant.
   // Browsers only allow sound after a click or key press, so the first one also starts the music.
   screen.addEventListener('pointerdown', e => {
+    if (nameBoxOpen) { closeNameBox(true); return; } // clicking away just finishes naming
     const cat = window.BouquetCat;
     const p = worldPoint(e);
     window.BouquetAudio?.start();
+    // Touch screens have no hover, so a tap on the cat shows its tag for a moment.
+    if (cat && e.pointerType === 'touch' && (cat.hitScruff(p.x, p.y) || cat.hitBody(p.x, p.y))) cat.showTag(2.5);
     if (cat && e.button === 0) {
       if (cat.hitScruff(p.x, p.y)) {
         screen.setPointerCapture(e.pointerId);
@@ -822,12 +899,11 @@
     restart();
   });
   screen.addEventListener('pointermove', e => {
-    const cat = window.BouquetCat;
-    if (!cat) return;
     const p = worldPoint(e);
-    if (cat.isHeld()) cat.drag(p.x, p.y, e.timeStamp);
-    else screen.style.cursor = cat.hitScruff(p.x, p.y) ? 'grab' : '';
+    Object.assign(pointer, p, { inside: e.pointerType !== 'touch' }); // mice and pens hover; fingers don't
+    if (window.BouquetCat?.isHeld()) window.BouquetCat.drag(p.x, p.y, e.timeStamp);
   });
+  screen.addEventListener('pointerleave', () => { pointer.inside = false; });
   const letGo = e => {
     const cat = window.BouquetCat;
     if (!cat?.isHeld()) return;
@@ -836,7 +912,47 @@
   };
   screen.addEventListener('pointerup', letGo);
   screen.addEventListener('pointercancel', letGo);
+
+  // ---------- Naming the cat ----------
+  // N opens a small box where the tag is. The cat sits still while you type; Enter (or
+  // clicking away) saves the name and the cat answers with a mew. Esc cancels.
+  const nameBox = document.getElementById('name-box');
+  let nameBoxOpen = false;
+
+  function openNameBox() {
+    const cat = window.BouquetCat, tag = cat?.tag();
+    if (!tag || nameBoxOpen) return;
+    nameBoxOpen = true;
+    cat.stay(true);
+    nameBox.value = cat.getName();
+    nameBox.style.display = 'block';
+    const w = nameBox.offsetWidth, h = nameBox.offsetHeight, cell = tagCell(tag);
+    nameBox.style.left = Math.max(4, Math.min(viewW - w - 4, cell.x + cell.w / 2 - w / 2)) + 'px';
+    nameBox.style.top = Math.max(4, Math.min(viewH - h - 4, cell.y + cellH / 2 - h / 2)) + 'px';
+    nameBox.focus();
+    nameBox.select();
+  }
+
+  function closeNameBox(save) {
+    if (!nameBoxOpen) return;
+    nameBoxOpen = false; // first, so the blur below doesn't close it a second time
+    const cat = window.BouquetCat;
+    if (save && cat.setName(nameBox.value)) window.BouquetAudio?.meow('chirp');
+    nameBox.style.display = 'none';
+    nameBox.blur();
+    cat.stay(false);
+    cat.showTag(2.5); // show off the (new) name for a moment
+  }
+
+  nameBox.addEventListener('keydown', e => {
+    e.stopPropagation(); // typing never reaches the replant / sound keys below
+    if (e.key === 'Enter') closeNameBox(true);
+    else if (e.key === 'Escape') closeNameBox(false);
+  });
+  nameBox.addEventListener('blur', () => closeNameBox(true));
+
   window.addEventListener('keydown', e => {
+    if (e.target === nameBox) return;               // typing a name
     if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
     e.preventDefault();
     const audio = window.BouquetAudio;
@@ -845,6 +961,7 @@
       return;
     }
     audio?.start();
+    if (e.key === 'n' || e.key === 'N') { openNameBox(); return; } // N names the cat
     restart();
   });
 

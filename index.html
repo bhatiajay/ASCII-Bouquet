@@ -12,11 +12,18 @@
       font: 12px ui-monospace, Menlo, Consolas, monospace; color: #6e6680;
       pointer-events: none; user-select: none;
     }
+    #name-box {
+      display: none; position: fixed; width: 18ch; padding: 3px 8px; text-align: center;
+      font: 12px ui-monospace, Menlo, Consolas, monospace; color: #ffe9c7;
+      background: #0d0b12; border: 1px solid #fff1b8; border-radius: 3px; outline: none;
+      box-shadow: 0 0 10px rgba(255, 241, 184, 0.35);
+    }
   </style>
 </head>
 <body>
   <canvas id="screen"></canvas>
-  <div id="hint">drag the cat by the scruff of its neck · click elsewhere or press any key to replant · M to toggle sound</div>
+  <input id="name-box" maxlength="20" spellcheck="false" autocomplete="off" aria-label="Name your cat">
+  <div id="hint">drag the cat by the scruff · hover to meet it · N to name it · click elsewhere or any key to replant · M sound</div>
   <script src="audio.js"></script>
   <script src="cat.js"></script>
   <script src="bouquet.js"></script>

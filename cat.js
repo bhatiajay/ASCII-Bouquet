@@ -17,7 +17,13 @@
 //   hitScruff(x, y), hitBody(x, y)          hit tests
 //   grab(x, y, time), drag(x, y, time), release(time), poke(), isHeld()
 //   resize(oldW, newW)           keep the cat in place when the window changes size
+//   setHover(on), showTag(s)     the pointer is over the cat / show its tag for s seconds (touch)
+//   glow()                       how strongly to light up its outline right now (0..1)
+//   tag()                        { text, x, y, alpha } for its name tag: x = over its body, y = its highest point
+//   getName(), setName(name)     its name (saved in the browser)
+//   stay(on)                     keep it sitting still (while you type its name)
 //   setBehavior(name)            sit, walk, groom, roll, paw, stretch or nap right now (try it in the console)
+//   setMood(name), info()        change its mood / { name, mood, behavior } (also for the console)
 (() => {
   'use strict';
 
@@ -28,6 +34,22 @@
   const WALK_SPEED = 5.5;     // U/s
   const SCRUFF_RADIUS = 3.2;  // U: how close to the back of the neck a press must be to grab it
   const SWAT_SECONDS = 0.95;  // one swipe at the flowers
+  const MOOD_SECONDS = [120, 240]; // how long a mood lasts before a new one is picked
+  const NAME_KEY = 'asciiBouquet.catName';
+  const NAMES = ['Mango', 'Biscuit', 'Pumpkin', 'Marmalade', 'Clementine', 'Nacho', 'Ginger',
+    'Saffron', 'Tangerine', 'Apricot', 'Butterscotch', 'Cheddar'];
+
+  // Each mood multiplies how likely the cat is to pick each behaviour (missing = 1).
+  // speed scales its walking pace; complain scales how often it meows while held.
+  const MOODS = {
+    content:      { face: '(-.-)~',   weights: {} },
+    sleepy:       { face: '(-_-) zZ', weights: { nap: 4, sit: 1.5, stretch: 1.5, walk: 0.4, roll: 0.5, paw: 0.4 }, speed: 0.7, complain: 0.6 },
+    playful:      { face: '(=^.^=)',  weights: { roll: 3, paw: 3, walk: 1.2, sit: 0.6, nap: 0.25 } },
+    curious:      { face: '(o.o)?',   weights: { walk: 2.2, paw: 2, sit: 0.7, nap: 0.4 } },
+    grumpy:       { face: '(>_<)',    weights: { sit: 2.2, groom: 1.6, walk: 0.7, paw: 0.4, roll: 0.25 }, complain: 1.8 },
+    affectionate: { face: '(^-^)<3',  weights: { groom: 2.5, roll: 2, sit: 1.3, nap: 0.8 } },
+    zoomies:      { face: '(@_@)!!',  weights: { walk: 4, paw: 1.5, sit: 0.3, groom: 0.3, nap: 0.05 }, speed: 2.2 },
+  };
 
   const COLORS = {
     fur: '#ff8700',       // ANSI 256-colour 208
@@ -170,6 +192,31 @@
   const tailPhase = rnd(0, 2 * PI);
   const cur = { ...SIT }, shown = { ...SIT };
   const drops = [], rings = [];
+  let moodName = pickMood(null), moodTimer = rnd(...MOOD_SECONDS);
+  let hovered = false, tagTimer = 0, glowLevel = 0, clockNow = 0, staying = false;
+  let name = loadName();
+
+  // A random mood, different from the current one.
+  function pickMood(current) {
+    const options = Object.keys(MOODS).filter(m => m !== current);
+    return options[Math.floor(Math.random() * options.length)];
+  }
+  const mood = () => MOODS[moodName];
+
+  // The cat's name lives in localStorage, so it survives reloads. Some browsers block
+  // storage for pages opened from disk; then the name just lasts for this visit.
+  function loadName() {
+    try {
+      const saved = localStorage.getItem(NAME_KEY);
+      if (saved) return saved;
+    } catch {}
+    const fresh = NAMES[Math.floor(Math.random() * NAMES.length)];
+    saveName(fresh);
+    return fresh;
+  }
+  function saveName(n) {
+    try { localStorage.setItem(NAME_KEY, n); } catch {}
+  }
 
   const faceScale = () => (face < 0 ? -1 : 1) * Math.max(0.08, Math.abs(face));
   const pan = () => clamp((pos.x / world.worldW) * 2 - 1, -1, 1) * 0.6;
@@ -313,19 +360,26 @@
     def.start?.(behavior);
   }
   function updateBehavior(dt) {
+    if (staying) { // sit still (someone is typing its name)
+      if (behavior.name !== 'sit') startBehavior('sit');
+      behavior.t = 0;
+      return;
+    }
     const b = behavior;
     b.t += dt;
     b.def.update?.(b, dt);
     if (b.done || b.t >= b.dur) startBehavior(b.def.next || pickNext());
   }
   // A weighted random choice, not repeating the last one (except walking somewhere else).
+  // The cat's mood scales each weight.
   function pickNext() {
     const options = Object.keys(BEHAVIORS).filter(n => {
       const d = BEHAVIORS[n];
       return d.weight > 0 && (!d.ok || d.ok()) && (n !== behavior?.name || n === 'walk');
     });
-    let r = Math.random() * options.reduce((sum, n) => sum + BEHAVIORS[n].weight, 0);
-    for (const n of options) if ((r -= BEHAVIORS[n].weight) <= 0) return n;
+    const weight = n => BEHAVIORS[n].weight * (mood().weights[n] ?? 1);
+    let r = Math.random() * options.reduce((sum, n) => sum + weight(n), 0);
+    for (const n of options) if ((r -= weight(n)) <= 0) return n;
     return 'sit';
   }
 
@@ -336,7 +390,7 @@
     if (Math.abs(dx) < U * 0.5) return true;
     faceTarget = dx > 0 ? 1 : -1;
     if (face * faceTarget > 0.7) { // finish turning around before setting off
-      const stepPx = Math.min(Math.abs(dx), WALK_SPEED * U * dt);
+      const stepPx = Math.min(Math.abs(dx), WALK_SPEED * (mood().speed ?? 1) * U * dt);
       pos.x += faceTarget * stepPx;
       gaitPhase += (stepPx / U) * 1.25;
     }
@@ -533,10 +587,22 @@
       updateBehavior(dt);
     } else if (mode === 'held') {
       target = POSES.held;
-      if ((meowTimer -= dt) <= 0) { meow('grab'); meowTimer = rnd(3, 5.5); } // still complaining
+      if ((meowTimer -= dt) <= 0) { // still complaining
+        meow('grab');
+        meowTimer = rnd(3, 5.5) / (mood().complain ?? 1);
+      }
     } else {
       target = POSES.fall;
     }
+    if ((moodTimer -= dt) <= 0) { // moods come and go
+      moodName = pickMood(moodName);
+      moodTimer = rnd(...MOOD_SECONDS);
+    }
+    // The hover glow fades in and out (about 0.15 s).
+    clockNow = clock;
+    tagTimer = Math.max(0, tagTimer - dt);
+    const lit = hovered || mode === 'held' || tagTimer > 0 ? 1 : 0;
+    glowLevel += (lit - glowLevel) * (1 - Math.exp(-7 * dt));
 
     // 2. Ease the pose towards the target, then 3. layer procedural motion on top.
     const k = 1 - Math.exp(-(mode === 'held' ? 11 : 6) * dt);
@@ -647,12 +713,16 @@
     }
   }
 
-  // An ear: two quadratic curves from the base on the head out to the tip.
+  // Ear geometry in head space (before tilt): base centre B, pointing along u, len long.
   // `back` (0..1) swings it backwards and flattens it.
+  const EAR_ANGLES = { back: -2.05, front: -1.05 };
+  function earGeom(ang, r, back) {
+    return { B: P(Math.cos(ang) * r * 0.72, Math.sin(ang) * r * 0.72), u: dir(ang - back * 1.0), len: r * (1.2 - 0.45 * back) };
+  }
+  // An ear: two quadratic curves from the base on the head out to the tip.
   function drawEar(ctx, ang, r, back, color) {
-    const tipAng = ang - back * 1.0, len = r * (1.2 - 0.45 * back), bw = r * 0.44;
-    const B = P(Math.cos(ang) * r * 0.72, Math.sin(ang) * r * 0.72);
-    const u = dir(tipAng), w = P(-Math.sin(ang), Math.cos(ang));
+    const { B, u, len } = earGeom(ang, r, back), bw = r * 0.44;
+    const w = P(-Math.sin(ang), Math.cos(ang));
     const shape = (scale, fill) => {
       const tip = along(B, u, len * scale);
       ctx.fillStyle = fill;
@@ -676,13 +746,13 @@
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.rotate(p.tilt);
-    drawEar(ctx, -2.05, r, p.earBack, COLORS.furShade);
+    drawEar(ctx, EAR_ANGLES.back, r, p.earBack, COLORS.furShade);
     const g = ctx.createRadialGradient(r * 0.1, -r * 0.5, r * 0.2, 0, 0, r * 1.1);
     g.addColorStop(0, COLORS.furLight);
     g.addColorStop(1, COLORS.fur);
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.ellipse(0, 0, r * 1.08, r * 0.94, 0, 0, 2 * PI); ctx.fill();
-    drawEar(ctx, -1.05, r, p.earBack, COLORS.fur);
+    drawEar(ctx, EAR_ANGLES.front, r, p.earBack, COLORS.fur);
 
     ctx.strokeStyle = COLORS.stripe; // forehead stripes
     ctx.lineWidth = 0.4;
@@ -795,7 +865,7 @@
     lastVx = accX = 0;
     swatX = swatY = shakeAmt = 0;
     target = POSES.held;
-    meowTimer = rnd(3, 5);
+    meowTimer = rnd(3, 5) / (mood().complain ?? 1);
     meow('grab');
   }
 
@@ -857,9 +927,50 @@
     return true;
   }
 
+  // ---------- Hover glow, name tag and mood ----------
+  // The glow pulses very slightly while it's lit.
+  const glow = () => glowLevel * (0.88 + 0.12 * Math.sin(clockNow * 3));
+
+  // Where its name tag belongs: centred over the body, and the highest point of the cat
+  // (ears, tail, paws in the air...), so the tag can go above it in any pose, even upside down.
+  function tag() {
+    if (!rig || !world) return null;
+    const p = shown, { head, r } = rig;
+    const c = Math.cos(p.tilt), s = Math.sin(p.tilt);
+    const inHead = q => P(head.x + q.x * c - q.y * s, head.y + q.x * s + q.y * c);
+    const earTip = ang => { const { B, u, len } = earGeom(ang, r, p.earBack); return inHead(along(B, u, len)); };
+    const points = [...rig.low, rig.scruff, rig.tail[3], rig.at(0.5, rig.h + p.arch),
+      inHead(P(0, -r * 0.94)), earTip(EAR_ANGLES.back), earTip(EAR_ANGLES.front)];
+    let top = Infinity;
+    for (const q of points) top = Math.min(top, toWorld(q).y);
+    const centre = toWorld(mix(rig.H, rig.S, 0.5));
+    return { text: `${name} · ${moodName} ${mood().face}`, x: centre.x, y: top, alpha: glowLevel };
+  }
+
+  function setName(n) {
+    const clean = String(n).replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
+    if (!clean) return false; // keep the old name
+    name = clean;
+    saveName(name);
+    return true;
+  }
+
+  function setMood(m) {
+    if (!MOODS[m]) return false;
+    moodName = m;
+    moodTimer = rnd(...MOOD_SECONDS);
+    return true;
+  }
+
   window.BouquetCat = {
     step, draw, drawReflection, drawSplash,
     hitScruff, hitBody, grab, drag, release, poke, resize, setBehavior,
     isHeld: () => mode === 'held',
+    setHover: on => { hovered = !!on; },
+    showTag: seconds => { tagTimer = Math.max(tagTimer, seconds); },
+    glow, tag, setName, setMood,
+    getName: () => name,
+    stay: on => { staying = !!on; },
+    info: () => ({ name, mood: moodName, behavior: mode === 'ground' ? behavior?.name : mode }),
   };
 })();

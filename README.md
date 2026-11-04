@@ -17,6 +17,19 @@ A procedural ASCII art animation of a blooming lily bouquet under a starry sky, 
   - Grab it by the scruff of its neck and it dangles: its body stretches, its legs hang, its paws wriggle, and it swings as you drag it
   - Drop or throw it and it rights itself as it falls, splashes into the water, bobs back up and shakes itself off
   - It meows when you grab it, using real cat recordings (CC0, credited in [sounds/CREDITS.md](sounds/CREDITS.md)). Each meow plays at a slightly different pitch, and the splash sound is synthesized
+  - Hover over it and a soft glow lights up around its outline, with a tag showing its name and mood, like `[ Mango · playful (=^.^=) ]`
+  - Name it with **N**. It sits still while you type, and the name is saved in your browser. Until you name it, it picks an orange-cat name of its own
+  - Its mood is random and changes every few minutes, and it shapes what the cat does:
+
+    | Mood | Face | Tends to |
+    |---|---|---|
+    | content | `(-.-)~` | do a bit of everything |
+    | sleepy | `(-_-) zZ` | nap, walk slowly |
+    | playful | `(=^.^=)` | roll around and bat at the flowers |
+    | curious | `(o.o)?` | wander and paw the flowers |
+    | grumpy | `(>_<)` | sit and groom, complain when held |
+    | affectionate | `(^-^)<3` | groom and roll |
+    | zoomies | `(@_@)!!` | run back and forth at double speed |
 - The bouquet stays in full bloom until you replant it
 
 ## Run it
@@ -25,7 +38,9 @@ Open `index.html` in a web browser.
 
 - **Drag the cat by the scruff** (the back of its neck; the cursor changes to a hand) to pick it up. Let go to drop it, or fling it.
 - **Click the cat's body** to startle it.
+- **Hover over the cat** to see its name and mood. On a touch screen, tap it.
+- **N** names the cat. Enter saves, Esc cancels.
 - **Click anywhere else, or press any key,** to replant the bouquet.
 - **M** toggles sound. The first click or key press starts the music.
 
-In the browser console, `BouquetCat.setBehavior('roll')` makes the cat do something right away (`sit`, `walk`, `groom`, `roll`, `paw`, `stretch` or `nap`).
+In the browser console, `BouquetCat.setBehavior('roll')` makes the cat do something right away (`sit`, `walk`, `groom`, `roll`, `paw`, `stretch` or `nap`), `BouquetCat.setMood('zoomies')` changes its mood, and `BouquetCat.info()` tells you its name, mood and what it's doing.
