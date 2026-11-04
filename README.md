@@ -12,7 +12,20 @@ A procedural ASCII art animation of a blooming lily bouquet under a starry sky, 
 - A crescent moon in the corner, reflected in the water
 - Generated music (no audio files): a soft chord pad and a wandering music-box melody, with a chime as each lily opens
 - Night-time ambience: crickets, lapping water, a breeze that rises and falls with the swaying stems, and the occasional owl
+- An orange tabby cat built from cubic and quadratic Bézier curves (arched back, belly, legs, ears and a tapering tail). Its control points move with what it's doing:
+  - On its own it sits, wanders, grooms, stretches, naps, rolls onto its back, and rears up to bat at the stems, which wobble and bob their lilies
+  - Grab it by the scruff of its neck and it dangles: its body stretches, its legs hang, its paws wriggle, and it swings as you drag it
+  - Drop or throw it and it rights itself as it falls, splashes into the water, bobs back up and shakes itself off
+  - It meows when you grab it, and the splash makes a sound too. Both are synthesized like the music
+- The bouquet stays in full bloom until you replant it
 
 ## Run it
 
-Open `index.html` in a web browser. Click, or press any key, to replant the bouquet. The first click also starts the music. Press **M** to toggle sound.
+Open `index.html` in a web browser.
+
+- **Drag the cat by the scruff** (the back of its neck; the cursor changes to a hand) to pick it up. Let go to drop it, or fling it.
+- **Click the cat's body** to startle it.
+- **Click anywhere else, or press any key,** to replant the bouquet.
+- **M** toggles sound. The first click or key press starts the music.
+
+In the browser console, `BouquetCat.setBehavior('roll')` makes the cat do something right away (`sit`, `walk`, `groom`, `roll`, `paw`, `stretch` or `nap`).
